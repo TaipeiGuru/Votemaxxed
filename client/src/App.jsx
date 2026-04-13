@@ -58,6 +58,97 @@ function MogOverlay({ payload, onDone }) {
   );
 }
 
+function VoteDistribution({ breakdown, mog }) {
+  if (!breakdown) return null;
+  const { promptText, answerAText, answerBText, authorAName, authorBName, votersForA, votersForB } =
+    breakdown;
+  const list = (names) =>
+    names.length > 0 ? names.join(", ") : "—";
+
+  return (
+    <div
+      className="vote-distribution"
+      style={{
+        marginTop: "1.25rem",
+        padding: "1rem",
+        borderRadius: "var(--radius)",
+        background: "rgba(139, 149, 168, 0.08)",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <p style={{ margin: "0 0 0.5rem", fontWeight: 600 }}>Vote breakdown</p>
+      <p className="muted" style={{ margin: "0 0 1rem", fontSize: "0.9rem" }}>
+        {promptText}
+      </p>
+      {mog && (
+        <p
+          style={{
+            margin: "0 0 0.75rem",
+            fontSize: "0.88rem",
+            color: "var(--accent-dim)",
+          }}
+        >
+          MOGGED — unanimous win for this round.
+        </p>
+      )}
+      <div
+        style={{
+          display: "grid",
+          gap: "0.85rem",
+          gridTemplateColumns: "1fr 1fr",
+        }}
+      >
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            padding: "0.75rem",
+          }}
+        >
+          <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
+            {authorAName}
+          </p>
+          <p style={{ margin: "0 0 0.5rem", fontSize: "0.92rem" }}>{answerAText}</p>
+          <p style={{ margin: 0, fontSize: "0.88rem" }}>
+            <strong>{votersForA.length}</strong> vote{votersForA.length === 1 ? "" : "s"}
+            {votersForA.length > 0 ? ": " : ""}
+            <span className="muted">{list(votersForA)}</span>
+          </p>
+        </div>
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius)",
+            padding: "0.75rem",
+          }}
+        >
+          <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
+            {authorBName}
+          </p>
+          <p style={{ margin: "0 0 0.5rem", fontSize: "0.92rem" }}>{answerBText}</p>
+          <p style={{ margin: 0, fontSize: "0.88rem" }}>
+            <strong>{votersForB.length}</strong> vote{votersForB.length === 1 ? "" : "s"}
+            {votersForB.length > 0 ? ": " : ""}
+            <span className="muted">{list(votersForB)}</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NextVoteSplash({ active }) {
+  if (!active) return null;
+  return (
+    <div className="next-vote-splash" aria-live="polite">
+      <div className="next-vote-splash-backdrop" />
+      <div className="next-vote-splash-card">
+        <p className="next-vote-splash-text">Get ready for the next vote...</p>
+      </div>
+    </div>
+  );
+}
+
 function ChudOverlay({ payload, onDone }) {
   useEffect(() => {
     const t = setTimeout(onDone, 3400);
@@ -97,6 +188,8 @@ export default function App() {
   const [mogPayload, setMogPayload] = useState(null);
   const [chudPayload, setChudPayload] = useState(null);
   const [customPromptDraft, setCustomPromptDraft] = useState("");
+  const [voteRevealVisible, setVoteRevealVisible] = useState(false);
+  const pendingVoteRevealRef = useRef(null);
 
   useEffect(() => {
     function onState(s) {
@@ -123,6 +216,52 @@ export default function App() {
       socket.off("chud_overlay", onChud);
     };
   }, [socket]);
+
+  useEffect(() => {
+    const lr = session?.lastResult;
+    if (!lr?.voteBreakdown) {
+      setVoteRevealVisible(false);
+      pendingVoteRevealRef.current = null;
+      return;
+    }
+    if (session?.phase === "ended") {
+      setVoteRevealVisible(true);
+      pendingVoteRevealRef.current = null;
+      return;
+    }
+    if (lr.overlayPause) {
+      setVoteRevealVisible(false);
+      pendingVoteRevealRef.current = lr.queueIndex;
+    } else {
+      setVoteRevealVisible(true);
+      pendingVoteRevealRef.current = null;
+    }
+  }, [
+    session?.phase,
+    session?.lastResult?.queueIndex,
+    session?.lastResult?.overlayPause,
+    session?.lastResult?.voteBreakdown,
+  ]);
+
+  useEffect(() => {
+    if (mogPayload || chudPayload) return;
+    const lr = session?.lastResult;
+    if (
+      session?.phase !== "showdown" ||
+      !lr?.overlayPause ||
+      pendingVoteRevealRef.current !== lr.queueIndex
+    ) {
+      return;
+    }
+    setVoteRevealVisible(true);
+    pendingVoteRevealRef.current = null;
+  }, [
+    mogPayload,
+    chudPayload,
+    session?.phase,
+    session?.lastResult?.queueIndex,
+    session?.lastResult?.overlayPause,
+  ]);
 
   const createSession = useCallback(() => {
     setError("");
@@ -223,10 +362,19 @@ export default function App() {
     if (!showdown || !session?.showdown) return false;
     const d = session.showdown;
     const eligible = d.eligibleVoters || [];
-    return eligible.includes(session.you) && !d.myVote;
+    return (
+      eligible.includes(session.you) &&
+      !d.myVote &&
+      !d.reviewActive &&
+      !d.splashActive
+    );
   }, [showdown, session]);
 
   const displayCode = session?.code;
+
+  const showVoteDistribution =
+    session?.lastResult?.voteBreakdown &&
+    (session?.phase === "ended" || voteRevealVisible);
 
   return (
     <div className="layout">
@@ -251,6 +399,7 @@ export default function App() {
           onDone={() => setChudPayload(null)}
         />
       )}
+      <NextVoteSplash active={!!session?.showdown?.splashActive} />
 
       {error && (
         <div
@@ -543,6 +692,15 @@ export default function App() {
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
           </h2>
+          {session.showdown.reviewActive && (
+            <p
+              className="muted"
+              style={{ margin: "0 0 1rem", fontSize: "0.92rem" }}
+            >
+              Vote breakdown below — next prompt opens automatically after a short
+              pause.
+            </p>
+          )}
           <div
             style={{
               display: "grid",
@@ -557,9 +715,6 @@ export default function App() {
                 padding: "0.85rem",
               }}
             >
-              <p className="muted" style={{ margin: "0 0 0.35rem" }}>
-                Answer A
-              </p>
               <p style={{ margin: 0 }}>{session.showdown.answerA}</p>
             </div>
             <div
@@ -569,9 +724,6 @@ export default function App() {
                 padding: "0.85rem",
               }}
             >
-              <p className="muted" style={{ margin: "0 0 0.35rem" }}>
-                Answer B
-              </p>
               <p style={{ margin: 0 }}>{session.showdown.answerB}</p>
             </div>
           </div>
@@ -619,25 +771,11 @@ export default function App() {
             </p>
           )}
 
-          {session.lastResult && (
-            <div
-              style={{
-                marginTop: "1.25rem",
-                padding: "0.85rem",
-                borderRadius: "var(--radius)",
-                background: "rgba(93, 211, 158, 0.08)",
-                border: "1px solid rgba(93, 211, 158, 0.35)",
-              }}
-            >
-              <p style={{ margin: "0 0 0.35rem", fontWeight: 600 }}>
-                Last result
-              </p>
-              <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
-                Votes: A {session.lastResult.votesForA} · B{" "}
-                {session.lastResult.votesForB}
-                {session.lastResult.mog && " — MOGGED"}
-              </p>
-            </div>
+          {showVoteDistribution && session.phase === "showdown" && (
+            <VoteDistribution
+              breakdown={session.lastResult.voteBreakdown}
+              mog={!!session.lastResult.mog}
+            />
           )}
         </div>
       )}
@@ -645,6 +783,12 @@ export default function App() {
       {session && ended && (
         <div className="card">
           <h2>Game over</h2>
+          {showVoteDistribution && (
+            <VoteDistribution
+              breakdown={session.lastResult.voteBreakdown}
+              mog={!!session.lastResult.mog}
+            />
+          )}
           {session.winner && (
             <>
               <p style={{ fontSize: "1.25rem", margin: "0.75rem 0" }}>

@@ -13,6 +13,13 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 /** How many full passes over all prompts (spec: "after 2 rounds"). */
 const SHOWDOWN_PASSES = 2;
 
+/** Time vote distribution stays on screen before advancing (after mog/chud when applicable). */
+const VOTE_DISTRIBUTION_REVIEW_MS = 7500;
+/** Extra delay so overlays can finish before the distribution window counts in earnest. */
+const OVERLAY_BEFORE_REVIEW_MS = 3600;
+/** Splash between vote distribution and the next prompt. */
+const NEXT_VOTE_SPLASH_MS = 2000;
+
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
 const CHUD_TEASES = [
@@ -39,6 +46,18 @@ const sessions = new Map();
 
 function publicPlayer(p) {
   return { id: p.id, name: p.name };
+}
+
+function publicLastResult(r) {
+  if (!r) return null;
+  return {
+    queueIndex: r.queueIndex,
+    votesForA: r.votesForA,
+    votesForB: r.votesForB,
+    mog: r.mog,
+    overlayPause: r.overlayPause,
+    voteBreakdown: r.voteBreakdown,
+  };
 }
 
 function sessionSnapshot(sess, forPlayerId) {
@@ -88,7 +107,7 @@ function sessionSnapshot(sess, forPlayerId) {
       ...base,
       promptsMeta,
       scores: { ...sess.scores },
-      lastResult: sess.lastShowdownResult,
+      lastResult: publicLastResult(sess.lastShowdownResult),
       winner: sess.winner ?? null,
       showdown: null,
     };
@@ -111,8 +130,9 @@ function sessionSnapshot(sess, forPlayerId) {
     const voteCounts = tallyVotes(sess, sd);
     const lastResult =
       sess.lastShowdownResult &&
-      sess.lastShowdownResult.queueIndex < sess.currentQueueIndex
-        ? sess.lastShowdownResult
+      (sess.lastShowdownResult.queueIndex < sess.currentQueueIndex ||
+        sess.showdownReviewActive)
+        ? publicLastResult(sess.lastShowdownResult)
         : null;
 
     return {
@@ -134,6 +154,8 @@ function sessionSnapshot(sess, forPlayerId) {
         votesNeeded: eligibleVoters.length,
         voteCounts,
         myVote,
+        reviewActive: !!sess.showdownReviewActive,
+        splashActive: !!sess.showdownSplashActive,
         everyoneVoted:
           eligibleVoters.length === 0 ||
           Object.keys(sess.showdownVotes[queueIndex] || {}).length ===
@@ -201,6 +223,76 @@ function broadcastSession(sess) {
   }
 }
 
+function clearShowdownTimers(sess) {
+  if (sess._showdownAdvanceTimer) {
+    clearTimeout(sess._showdownAdvanceTimer);
+    sess._showdownAdvanceTimer = null;
+  }
+  if (sess._nextVoteSplashTimer) {
+    clearTimeout(sess._nextVoteSplashTimer);
+    sess._nextVoteSplashTimer = null;
+  }
+}
+
+function bumpShowdownQueueAndMaybeEnd(sess) {
+  sess.currentQueueIndex++;
+  if (sess.currentQueueIndex >= sess.showdownQueue.length) {
+    sess.phase = "ended";
+    let best = -1;
+    let winners = [];
+    for (const p of sess.players) {
+      const s = sess.scores[p.id] || 0;
+      if (s > best) {
+        best = s;
+        winners = [p];
+      } else if (s === best) {
+        winners.push(p);
+      }
+    }
+    sess.winner = {
+      names: winners.map((w) => w.name),
+      score: best,
+    };
+  }
+}
+
+function scheduleShowdownQueueAdvance(sess, overlayPause) {
+  clearShowdownTimers(sess);
+  sess.showdownSplashActive = false;
+  sess.showdownReviewActive = true;
+  broadcastSession(sess);
+
+  const delay =
+    VOTE_DISTRIBUTION_REVIEW_MS + (overlayPause ? OVERLAY_BEFORE_REVIEW_MS : 0);
+  const code = sess.code;
+  sess._showdownAdvanceTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s) return;
+    s._showdownAdvanceTimer = null;
+    s.showdownReviewActive = false;
+    if (s.phase !== "showdown") {
+      broadcastSession(s);
+      return;
+    }
+    s.showdownSplashActive = true;
+    broadcastSession(s);
+    s._nextVoteSplashTimer = setTimeout(() => {
+      const s2 = sessions.get(code);
+      if (!s2) return;
+      s2._nextVoteSplashTimer = null;
+      s2.showdownSplashActive = false;
+      if (s2.phase !== "showdown") {
+        broadcastSession(s2);
+        return;
+      }
+      bumpShowdownQueueAndMaybeEnd(s2);
+      broadcastSession(s2);
+      skipShowdownsWithNoVoters(s2);
+      broadcastSession(s2);
+    }, NEXT_VOTE_SPLASH_MS);
+  }, delay);
+}
+
 function skipShowdownsWithNoVoters(sess) {
   while (sess.phase === "showdown" && sess.currentQueueIndex < sess.showdownQueue.length) {
     const sd = getCurrentShowdown(sess);
@@ -235,6 +327,19 @@ function advanceShowdown(sess) {
   const answerAText = sess.answers[String(sd.promptIndex)]?.[authors[0]] ?? "";
   const answerBText = sess.answers[String(sd.promptIndex)]?.[authors[1]] ?? "";
 
+  const votersForA = [];
+  const votersForB = [];
+  for (const vid of eligible) {
+    const c = votes[vid];
+    const pl = sess.players.find((p) => p.id === vid);
+    const nm = pl?.name ?? "?";
+    if (c === "A") votersForA.push(nm);
+    else if (c === "B") votersForB.push(nm);
+  }
+
+  const authorAName = sess.players.find((p) => p.id === authors[0])?.name ?? "?";
+  const authorBName = sess.players.find((p) => p.id === authors[1])?.name ?? "?";
+
   const uni = isUnanimous(votesForA, votesForB);
   let mogPayload = null;
   if (uni && eligible.length > 0) {
@@ -252,14 +357,6 @@ function advanceShowdown(sess) {
     });
   }
 
-  sess.lastShowdownResult = {
-    queueIndex: sess.currentQueueIndex,
-    votesForA,
-    votesForB,
-    points,
-    mog: mogPayload,
-  };
-
   let loserPlayerId = null;
   let chudAnswer = "";
   if (eligible.length > 0) {
@@ -275,6 +372,28 @@ function advanceShowdown(sess) {
   const loserSocketId = loserPlayerId
     ? sess.players.find((p) => p.id === loserPlayerId)?.socketId
     : null;
+
+  const hadMog = !!mogPayload;
+  const hadChud = !!(loserPlayerId && loserSocketId);
+  const overlayPause = hadMog || hadChud;
+
+  sess.lastShowdownResult = {
+    queueIndex: sess.currentQueueIndex,
+    votesForA,
+    votesForB,
+    points,
+    mog: mogPayload,
+    overlayPause,
+    voteBreakdown: {
+      promptText,
+      answerAText,
+      answerBText,
+      authorAName,
+      authorBName,
+      votersForA,
+      votersForB,
+    },
+  };
 
   const io = globalThis.__io;
   if (mogPayload && io) {
@@ -293,25 +412,14 @@ function advanceShowdown(sess) {
     });
   }
 
-  sess.currentQueueIndex++;
-  if (sess.currentQueueIndex >= sess.showdownQueue.length) {
-    sess.phase = "ended";
-    let best = -1;
-    let winners = [];
-    for (const p of sess.players) {
-      const s = sess.scores[p.id] || 0;
-      if (s > best) {
-        best = s;
-        winners = [p];
-      } else if (s === best) {
-        winners.push(p);
-      }
-    }
-    sess.winner = {
-      names: winners.map((w) => w.name),
-      score: best,
-    };
+  if (eligible.length === 0) {
+    sess.showdownReviewActive = false;
+    sess.showdownSplashActive = false;
+    bumpShowdownQueueAndMaybeEnd(sess);
+    return;
   }
+
+  scheduleShowdownQueueAdvance(sess, overlayPause);
 }
 
 function startServer() {
@@ -493,6 +601,9 @@ function startServer() {
       sess.showdownVotes = {};
       sess.lastShowdownResult = null;
       sess.winner = null;
+      sess.showdownReviewActive = false;
+      sess.showdownSplashActive = false;
+      clearShowdownTimers(sess);
 
       if (typeof cb === "function") cb({ ok: true });
       broadcastSession(sess);
@@ -523,6 +634,9 @@ function startServer() {
       broadcastSession(sess);
 
       if (isAllAnswersIn(sess)) {
+        clearShowdownTimers(sess);
+        sess.showdownReviewActive = false;
+        sess.showdownSplashActive = false;
         sess.phase = "showdown";
         sess.currentQueueIndex = 0;
         sess.showdownVotes = {};
@@ -540,6 +654,18 @@ function startServer() {
       const { sess, player } = found;
       if (sess.phase !== "showdown") {
         if (typeof cb === "function") cb({ ok: false, error: "No active showdown." });
+        return;
+      }
+      if (sess.showdownReviewActive) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Vote breakdown in progress — next round soon." });
+        }
+        return;
+      }
+      if (sess.showdownSplashActive) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Get ready — voting opens in a moment." });
+        }
         return;
       }
       const sd = getCurrentShowdown(sess);
@@ -584,6 +710,7 @@ function startServer() {
           broadcastSession(sess);
         }
       } else {
+        clearShowdownTimers(sess);
         sessions.delete(sess.code);
         io.to(sess.code).emit("session_state", {
           phase: "gone",
