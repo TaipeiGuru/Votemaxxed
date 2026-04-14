@@ -200,8 +200,7 @@ label {
 .next-vote-splash-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(15, 17, 20, 0.72);
-  backdrop-filter: blur(4px);
+  background: rgba(15, 17, 20, 0.78);
 }
 
 .next-vote-splash-card {

@@ -65,6 +65,19 @@ function VoteDistribution({ breakdown, mog }) {
   const list = (names) =>
     names.length > 0 ? names.join(", ") : "—";
 
+  const answerDisplayStyle = {
+    width: "100%",
+    margin: "0 0 0.5rem",
+    fontSize: "0.92rem",
+    minWidth: 0,
+    resize: "none",
+    whiteSpace: "normal",
+    overflowWrap: "anywhere",
+    textAlign: "left",
+    cursor: "default",
+    minHeight: "2.75rem",
+  };
+
   return (
     <div
       className="vote-distribution"
@@ -103,12 +116,20 @@ function VoteDistribution({ breakdown, mog }) {
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             padding: "0.75rem",
+            minWidth: 0,
           }}
         >
           <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
             {authorAName}
           </p>
-          <p style={{ margin: "0 0 0.5rem", fontSize: "0.92rem" }}>{answerAText}</p>
+          <textarea
+            readOnly
+            aria-label={`Answer by ${authorAName}`}
+            value={String(answerAText ?? "").slice(0, 50)}
+            rows={3}
+            maxLength={50}
+            style={answerDisplayStyle}
+          />
           <p style={{ margin: 0, fontSize: "0.88rem" }}>
             <strong>{votersForA.length}</strong> vote{votersForA.length === 1 ? "" : "s"}
             {votersForA.length > 0 ? ": " : ""}
@@ -120,12 +141,20 @@ function VoteDistribution({ breakdown, mog }) {
             border: "1px solid var(--border)",
             borderRadius: "var(--radius)",
             padding: "0.75rem",
+            minWidth: 0,
           }}
         >
           <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
             {authorBName}
           </p>
-          <p style={{ margin: "0 0 0.5rem", fontSize: "0.92rem" }}>{answerBText}</p>
+          <textarea
+            readOnly
+            aria-label={`Answer by ${authorBName}`}
+            value={String(answerBText ?? "").slice(0, 50)}
+            rows={3}
+            maxLength={50}
+            style={answerDisplayStyle}
+          />
           <p style={{ margin: 0, fontSize: "0.88rem" }}>
             <strong>{votersForB.length}</strong> vote{votersForB.length === 1 ? "" : "s"}
             {votersForB.length > 0 ? ": " : ""}
@@ -630,8 +659,9 @@ export default function App() {
           {myPrompts.map((p) => (
             <div key={p.index} style={{ marginTop: "1.25rem" }}>
               <label htmlFor={`a-${p.index}`}>{p.text}</label>
-              <textarea
+              <input
                 id={`a-${p.index}`}
+                type="text"
                 value={answers[String(p.index)] ?? ""}
                 onChange={(e) => {
                   setAnswersSaveStatus(null);
@@ -640,7 +670,8 @@ export default function App() {
                     [String(p.index)]: e.target.value,
                   }));
                 }}
-                maxLength={500}
+                maxLength={50}
+                autoComplete="off"
               />
             </div>
           ))}
@@ -684,75 +715,55 @@ export default function App() {
 
       {session && showdown && session.showdown && (
         <div className="card">
-          <p className="muted" style={{ margin: "0 0 0.25rem" }}>
+          {/*<p className="muted" style={{ margin: "0 0 0.25rem" }}>
             Showdown{" "}
             {session.showdown.queueIndex + 1} / {session.showdown.totalShowdowns}{" "}
             · Pass {session.showdown.passNumber}/{session.showdown.passesTotal}
-          </p>
+          </p>*/}
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
           </h2>
-          {session.showdown.reviewActive && (
-            <p
-              className="muted"
-              style={{ margin: "0 0 1rem", fontSize: "0.92rem" }}
-            >
-              Vote breakdown below — next prompt opens automatically after a short
-              pause.
-            </p>
-          )}
-          <div
-            style={{
-              display: "grid",
-              gap: "1rem",
-              gridTemplateColumns: "1fr 1fr",
-            }}
-          >
-            <div
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                padding: "0.85rem",
-              }}
-            >
-              <p style={{ margin: 0 }}>{session.showdown.answerA}</p>
-            </div>
-            <div
-              style={{
-                border: "1px solid var(--border)",
-                borderRadius: "var(--radius)",
-                padding: "0.85rem",
-              }}
-            >
-              <p style={{ margin: 0 }}>{session.showdown.answerB}</p>
-            </div>
-          </div>
 
           {canVote && (
-            <div style={{ marginTop: "1.25rem", display: "flex", gap: "0.75rem" }}>
+            <div
+              style={{
+                marginTop: "1.25rem",
+                display: "flex",
+                gap: "0.75rem",
+                alignItems: "stretch",
+              }}
+            >
               <button
                 type="button"
                 onClick={() => vote("A")}
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   background: "var(--surface)",
                   border: "1px solid var(--border)",
                   color: "var(--text)",
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  textAlign: "center",
                 }}
               >
-                Vote A
+                {session.showdown.answerA}
               </button>
               <button
                 type="button"
                 onClick={() => vote("B")}
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   background: "var(--surface)",
                   border: "1px solid var(--border)",
                   color: "var(--text)",
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  textAlign: "center",
                 }}
               >
-                Vote B
+                {session.showdown.answerB}
               </button>
             </div>
           )}

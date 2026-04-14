@@ -18,7 +18,7 @@ const VOTE_DISTRIBUTION_REVIEW_MS = 7500;
 /** Extra delay so overlays can finish before the distribution window counts in earnest. */
 const OVERLAY_BEFORE_REVIEW_MS = 3600;
 /** Splash between vote distribution and the next prompt. */
-const NEXT_VOTE_SPLASH_MS = 2000;
+const NEXT_VOTE_SPLASH_MS = 3000;
 
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
@@ -256,6 +256,13 @@ function bumpShowdownQueueAndMaybeEnd(sess) {
   }
 }
 
+/** Remove stale breakdown when advancing to a new voting round (keeps ended-phase result intact). */
+function clearLastShowdownResultIfStillVoting(sess) {
+  if (sess.phase === "showdown") {
+    sess.lastShowdownResult = null;
+  }
+}
+
 function scheduleShowdownQueueAdvance(sess, overlayPause) {
   clearShowdownTimers(sess);
   sess.showdownSplashActive = false;
@@ -286,8 +293,8 @@ function scheduleShowdownQueueAdvance(sess, overlayPause) {
         return;
       }
       bumpShowdownQueueAndMaybeEnd(s2);
-      broadcastSession(s2);
       skipShowdownsWithNoVoters(s2);
+      clearLastShowdownResultIfStillVoting(s2);
       broadcastSession(s2);
     }, NEXT_VOTE_SPLASH_MS);
   }, delay);
@@ -416,6 +423,7 @@ function advanceShowdown(sess) {
     sess.showdownReviewActive = false;
     sess.showdownSplashActive = false;
     bumpShowdownQueueAndMaybeEnd(sess);
+    clearLastShowdownResultIfStillVoting(sess);
     return;
   }
 
@@ -626,7 +634,7 @@ function startServer() {
           .map((a) => String(a.promptIndex))
       );
       for (const key of mine) {
-        const text = String(answers?.[key] ?? "").slice(0, 500);
+        const text = String(answers?.[key] ?? "").slice(0, 50);
         if (!sess.answers[key]) sess.answers[key] = {};
         sess.answers[key][player.id] = text;
       }
