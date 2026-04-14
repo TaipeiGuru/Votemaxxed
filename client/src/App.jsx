@@ -371,6 +371,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [error, setError] = useState("");
   const [answers, setAnswers] = useState({});
+  const [altPromptVisible, setAltPromptVisible] = useState({});
   /** null | 'saving' | 'saved' */
   const [answersSaveStatus, setAnswersSaveStatus] = useState(null);
   const [mogPayload, setMogPayload] = useState(null);
@@ -518,6 +519,16 @@ export default function App() {
     });
   }, [socket, answers]);
 
+  const requestAlternatePrompt = useCallback(
+    (promptIndex) => {
+      setError("");
+      socket.emit("request_alternate_prompt", { promptIndex }, (res) => {
+        if (!res?.ok) setError(res?.error || "Could not request alternate prompt.");
+      });
+    },
+    [socket]
+  );
+
   const vote = useCallback(
     (choice) => {
       socket.emit("vote", { choice }, (res) => {
@@ -542,6 +553,10 @@ export default function App() {
 
   useEffect(() => {
     if (session?.phase !== "answering") setAnswersSaveStatus(null);
+  }, [session?.phase]);
+
+  useEffect(() => {
+    if (session?.phase !== "answering") setAltPromptVisible({});
   }, [session?.phase]);
 
   useEffect(() => {
@@ -850,6 +865,87 @@ export default function App() {
           {myPrompts.map((p) => (
             <div key={p.index} style={{ marginTop: "1.25rem" }}>
               <label htmlFor={`a-${p.index}`}>{p.text}</label>
+              {session?.promptAlt?.[String(p.index)]?.swapped && (
+                <p className="muted" style={{ margin: "0.35rem 0 0" }}>
+                  Prompt switched to the alternate (locked).
+                </p>
+              )}
+              {!session?.promptAlt?.[String(p.index)]?.swapped && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAltPromptVisible((prev) => ({
+                        ...prev,
+                        [String(p.index)]: !prev[String(p.index)],
+                      }))
+                    }
+                    style={{
+                      padding: "0.4rem 0.7rem",
+                      fontSize: "0.85rem",
+                      background: "transparent",
+                      border: "1px solid var(--border)",
+                      color: "var(--muted)",
+                    }}
+                  >
+                    {altPromptVisible[String(p.index)] ? "Hide alternate prompt" : "See alternate prompt"}
+                  </button>
+                  {altPromptVisible[String(p.index)] && (
+                    <button
+                      type="button"
+                      onClick={() => requestAlternatePrompt(p.index)}
+                      disabled={
+                        (session?.promptAlt?.[String(p.index)]?.requestedBy || []).includes(session?.you)
+                      }
+                      style={{
+                        padding: "0.4rem 0.7rem",
+                        fontSize: "0.85rem",
+                        background: "var(--surface)",
+                        border: "1px solid var(--accent-dim)",
+                        color: "var(--accent)",
+                      }}
+                    >
+                      Request this prompt
+                    </button>
+                  )}
+                </div>
+              )}
+              {altPromptVisible[String(p.index)] &&
+                !session?.promptAlt?.[String(p.index)]?.swapped && (
+                  <div
+                    style={{
+                      marginTop: "0.75rem",
+                      padding: "0.75rem",
+                      borderRadius: "var(--radius)",
+                      border: "1px solid var(--border)",
+                      background: "rgba(139, 149, 168, 0.06)",
+                    }}
+                  >
+                    <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
+                      Alternate prompt
+                    </p>
+                    <p style={{ margin: 0 }}>
+                      {session?.promptAlt?.[String(p.index)]?.altText || "—"}
+                    </p>
+                    {(() => {
+                      const st = session?.promptAlt?.[String(p.index)];
+                      const requestedBy = st?.requestedBy || [];
+                      const otherAuthor = (p.authorIds || []).find((id) => id !== session?.you) || null;
+                      const otherRequested = otherAuthor ? requestedBy.includes(otherAuthor) : false;
+                      const youRequested = requestedBy.includes(session?.you);
+                      return (
+                        <p className="muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+                          {youRequested ? "You requested this." : "You have not requested this."}{" "}
+                          {otherAuthor
+                            ? otherRequested
+                              ? "The other author requested it too."
+                              : "Waiting on the other author."
+                            : null}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                )}
               <input
                 id={`a-${p.index}`}
                 type="text"

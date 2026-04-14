@@ -4,7 +4,11 @@ import express from "express";
 import cors from "cors";
 import { Server } from "socket.io";
 import { nanoid, customAlphabet } from "nanoid";
-import { buildGamePrompts, MAX_PROMPT_TEXT_LEN } from "./prompts.js";
+import {
+  buildGamePrompts,
+  HARDCODED_PROMPTS,
+  MAX_PROMPT_TEXT_LEN,
+} from "./prompts.js";
 import { buildAssignments, scoreShowdown, isUnanimous } from "./gameLogic.js";
 
 const PORT = Number(process.env.PORT) || 3001;
@@ -38,6 +42,47 @@ const CHUD_TEASES = [
 
 function pickChudTease() {
   return CHUD_TEASES[Math.floor(Math.random() * CHUD_TEASES.length)];
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function buildUniqueAlternatePrompts(gamePrompts) {
+  const primaryKeys = new Set(
+    (gamePrompts || []).map((p) => String(p?.text ?? "").trim().toLowerCase())
+  );
+  // Alternates must be built-in only (never custom), and must not repeat.
+  const pool = shuffle(
+    HARDCODED_PROMPTS.filter((t) => !primaryKeys.has(String(t).trim().toLowerCase()))
+  );
+
+  const out = {};
+  const n = gamePrompts?.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    const key = String(i);
+    out[key] = pool.pop() || "";
+  }
+  return out;
+}
+
+function publicPromptAltState(sess) {
+  const out = {};
+  const n = sess?.gamePrompts?.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    const key = String(i);
+    out[key] = {
+      altText: sess.alternatePrompts?.[key] ?? "",
+      swapped: !!sess.promptAltSwapped?.[key],
+      requestedBy: [...(sess.promptAltRequestedBy?.[key] || [])],
+    };
+  }
+  return out;
 }
 
 const app = express();
@@ -102,6 +147,7 @@ function sessionSnapshot(sess, forPlayerId) {
       myPrompts,
       answersMine,
       allAnswersIn: isAllAnswersIn(sess),
+      promptAlt: publicPromptAltState(sess),
     };
   }
 
@@ -675,6 +721,14 @@ function startServer() {
       sess.gamePrompts = pool.map((p) => ({ id: p.id, text: p.text }));
       sess.assignments = assignments;
       sess.answers = {};
+      sess.alternatePrompts = buildUniqueAlternatePrompts(sess.gamePrompts);
+      sess.promptAltRequestedBy = {};
+      sess.promptAltSwapped = {};
+      for (let i = 0; i < sess.gamePrompts.length; i++) {
+        const key = String(i);
+        sess.promptAltRequestedBy[key] = [];
+        sess.promptAltSwapped[key] = false;
+      }
       sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
       sess.phase = "answering";
 
@@ -729,6 +783,56 @@ function startServer() {
         skipShowdownsWithNoVoters(sess);
         broadcastSession(sess);
       }
+    });
+
+    socket.on("request_alternate_prompt", ({ promptIndex } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "answering") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
+        return;
+      }
+      const i = Number(promptIndex);
+      if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
+        return;
+      }
+      const key = String(i);
+      if (sess.promptAltSwapped?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Prompt already switched." });
+        return;
+      }
+      const authors = sess.assignments[i]?.authorIds || [];
+      if (!authors.includes(player.id)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only authors can request a swap." });
+        return;
+      }
+      if (!sess.promptAltRequestedBy) sess.promptAltRequestedBy = {};
+      if (!sess.promptAltRequestedBy[key]) sess.promptAltRequestedBy[key] = [];
+      if (!sess.promptAltRequestedBy[key].includes(player.id)) {
+        sess.promptAltRequestedBy[key].push(player.id);
+      }
+
+      const req = sess.promptAltRequestedBy[key];
+      const bothRequested = authors.every((aid) => req.includes(aid));
+      if (bothRequested) {
+        const alt = sess.alternatePrompts?.[key];
+        if (alt && String(alt).trim()) {
+          sess.gamePrompts[i].text = alt;
+          sess.promptAltSwapped[key] = true;
+        } else {
+          if (typeof cb === "function") cb({ ok: false, error: "No alternate prompt available." });
+          broadcastSession(sess);
+          return;
+        }
+      }
+
+      if (typeof cb === "function") cb({ ok: true, swapped: !!sess.promptAltSwapped?.[key] });
+      broadcastSession(sess);
     });
 
     socket.on("vote", ({ choice } = {}, cb) => {
