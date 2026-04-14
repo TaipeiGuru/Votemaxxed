@@ -4,6 +4,8 @@ import { io } from "socket.io-client";
 const SERVER =
   import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
 
+const MOGGED_SOUND_URL = `${import.meta.env.BASE_URL}audio/mogged.mp3`;
+
 function useSocket() {
   const ref = useRef(null);
   if (!ref.current) {
@@ -12,7 +14,7 @@ function useSocket() {
   return ref.current;
 }
 
-function MogOverlay({ payload, onDone }) {
+function MogOverlay({ payload, onDone, playSound = false }) {
   const [pieces] = useState(() =>
     Array.from({ length: 48 }, (_, i) => ({
       id: i,
@@ -27,6 +29,13 @@ function MogOverlay({ payload, onDone }) {
     const t = setTimeout(onDone, 3200);
     return () => clearTimeout(t);
   }, [onDone]);
+
+  useEffect(() => {
+    if (!payload || !playSound) return;
+    const audio = new Audio(MOGGED_SOUND_URL);
+    audio.volume = 0.9;
+    void audio.play().catch(() => {});
+  }, [payload, playSound]);
 
   if (!payload) return null;
 
@@ -797,6 +806,7 @@ export default function App() {
         <MogOverlay
           payload={mogPayload}
           onDone={() => setMogPayload(null)}
+          playSound={isProjector}
         />
       )}
       {chudPayload && (
