@@ -308,3 +308,245 @@ label {
   content: "✓";
   font-weight: 700;
 }
+
+/* —— Projector (TV / wide display) —— */
+.layout--projector {
+  max-width: min(96vw, 1320px);
+  padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 3rem;
+}
+
+.projector-root {
+  width: 100%;
+}
+
+.projector-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  margin-bottom: clamp(1.25rem, 3vw, 2rem);
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.projector-kicker {
+  margin: 0;
+  font-size: clamp(0.85rem, 1.5vw, 1rem);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.projector-code {
+  margin: 0.15rem 0 0;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+}
+
+.projector-phase-label {
+  margin: 0;
+  font-size: clamp(1rem, 2vw, 1.35rem);
+  text-align: right;
+}
+
+.projector-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+}
+
+.projector-card-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-weight: 400;
+  margin: 0 0 0.75rem;
+}
+
+.projector-lead {
+  font-size: clamp(1rem, 1.8vw, 1.2rem);
+  margin: 0 0 1.25rem;
+  max-width: 52rem;
+}
+
+.projector-player-list {
+  margin: 0;
+  padding-left: 1.35rem;
+  font-size: clamp(1.1rem, 2vw, 1.45rem);
+  line-height: 1.6;
+}
+
+.projector-player-name {
+  font-weight: 600;
+}
+
+.projector-answering-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(1rem, 3vw, 2.5rem);
+}
+
+@media (max-width: 640px) {
+  .projector-answering-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.projector-status-col {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: clamp(1rem, 2vw, 1.5rem);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.projector-status-heading {
+  margin: 0 0 0.85rem;
+  font-size: clamp(1.15rem, 2.2vw, 1.5rem);
+  font-weight: 700;
+}
+
+.projector-status-heading.ready {
+  color: var(--ok);
+}
+
+.projector-status-heading.waiting {
+  color: var(--accent);
+}
+
+.projector-name-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: clamp(1.2rem, 2.4vw, 1.75rem);
+  line-height: 1.65;
+}
+
+.projector-all-in {
+  margin: 1.5rem 0 0;
+  font-size: clamp(1.1rem, 2vw, 1.4rem);
+  font-weight: 600;
+  color: var(--ok);
+  text-align: center;
+}
+
+.projector-prompt {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(1.5rem, 3.2vw, 2.75rem);
+  line-height: 1.25;
+  margin: 0 0 clamp(1.25rem, 2.5vw, 2rem);
+  max-width: 56rem;
+}
+
+.projector-answers-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(1rem, 2.5vw, 2rem);
+  align-items: stretch;
+}
+
+@media (max-width: 700px) {
+  .projector-answers-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.projector-answer-panel {
+  min-width: 0;
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: clamp(1.25rem, 2.5vw, 2rem);
+  background: rgba(139, 149, 168, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.projector-answer-label {
+  font-size: clamp(1.25rem, 2.5vw, 1.75rem);
+  font-weight: 800;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+
+.projector-answer-text {
+  margin: 0;
+  font-size: clamp(1.35rem, 2.8vw, 2rem);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.projector-vote-meta {
+  margin: 1.25rem 0 0;
+  font-size: clamp(1rem, 1.8vw, 1.25rem);
+}
+
+.projector-pending-result {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.vote-distribution--projector {
+  margin-top: clamp(1rem, 2vw, 1.5rem) !important;
+  padding: clamp(1.25rem, 2.5vw, 2rem) !important;
+}
+
+.vote-distribution--projector > p:first-child {
+  font-size: clamp(1.35rem, 2.5vw, 1.85rem);
+}
+
+.vote-distribution--projector .muted {
+  font-size: clamp(1rem, 1.8vw, 1.2rem) !important;
+}
+
+.vote-distribution--projector textarea {
+  font-size: clamp(1rem, 1.8vw, 1.15rem) !important;
+  min-height: 4.5rem !important;
+}
+
+.projector-winner-line {
+  font-size: clamp(1.25rem, 2.2vw, 1.75rem);
+  margin: 1.25rem 0;
+}
+
+.projector-scores-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+  font-weight: 400;
+  margin: 1.5rem 0 0.75rem;
+}
+
+.projector-score-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  line-height: 1.85;
+  max-width: 36rem;
+}
+
+.projector-score-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.projector-score-val {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.layout--projector .next-vote-splash-text {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+}
+
+.layout--projector .next-vote-splash-card {
+  padding: clamp(2rem, 4vw, 3rem);
+}

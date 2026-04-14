@@ -22,6 +22,9 @@ const NEXT_VOTE_SPLASH_MS = 3000;
 
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
+/** Sentinel player id so `sessionSnapshot` can build an observer-style state for projectors. */
+const PROJECTOR_SENTINEL_ID = "__projector__";
+
 const CHUD_TEASES = [
   "The jury stayed home. Your answer sent the invites straight to spam.",
   "Zero votes — statistically indistinguishable from a haunted house: everyone fled.",
@@ -203,12 +206,51 @@ function tallyVotes(sess, sd) {
   return { A: a, B: b, authorA: authors[0], authorB: authors[1] };
 }
 
-function findSessionBySocket(socketId) {
+function findPlayerBySocket(socketId) {
   for (const sess of sessions.values()) {
     const p = sess.players.find((x) => x.socketId === socketId);
     if (p) return { sess, player: p };
   }
   return null;
+}
+
+function findProjectorBySocket(socketId) {
+  for (const sess of sessions.values()) {
+    const pr = sess.projectors?.find((x) => x.socketId === socketId);
+    if (pr) return { sess, projector: pr };
+  }
+  return null;
+}
+
+function playerHasBothAnswersSaved(sess, playerId) {
+  const promptIndices = sess.assignments
+    .filter((a) => a.authorIds.includes(playerId))
+    .map((a) => a.promptIndex);
+  return promptIndices.every((i) => {
+    const t = sess.answers[String(i)]?.[playerId];
+    return t && String(t).trim();
+  });
+}
+
+function computeAnswerProgress(sess) {
+  const done = [];
+  const waiting = [];
+  for (const p of sess.players) {
+    const row = { id: p.id, name: p.name };
+    if (playerHasBothAnswersSaved(sess, p.id)) done.push(row);
+    else waiting.push(row);
+  }
+  return { done, waiting };
+}
+
+function sessionSnapshotForProjector(sess) {
+  const snap = sessionSnapshot(sess, PROJECTOR_SENTINEL_ID);
+  return {
+    ...snap,
+    role: "projector",
+    you: null,
+    ...(sess.phase === "answering" && { answerProgress: computeAnswerProgress(sess) }),
+  };
 }
 
 function findSessionByCode(code) {
@@ -220,6 +262,12 @@ function broadcastSession(sess) {
   if (!io) return;
   for (const p of sess.players) {
     io.to(p.socketId).emit("session_state", sessionSnapshot(sess, p.id));
+  }
+  if (sess.projectors?.length) {
+    const projSnap = sessionSnapshotForProjector(sess);
+    for (const pr of sess.projectors) {
+      io.to(pr.socketId).emit("session_state", projSnap);
+    }
   }
 }
 
@@ -453,6 +501,7 @@ function startServer() {
             socketId: socket.id,
           },
         ],
+        projectors: [],
         phase: "lobby",
         customPrompts: [],
       };
@@ -465,6 +514,12 @@ function startServer() {
     });
 
     socket.on("join_session", ({ code, name } = {}, cb) => {
+      if (findProjectorBySocket(socket.id)) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Disconnect the projector tab before joining as a player." });
+        }
+        return;
+      }
       const c = String(code || "")
         .toUpperCase()
         .trim();
@@ -489,8 +544,31 @@ function startServer() {
       broadcastSession(sess);
     });
 
+    socket.on("join_projector", ({ code } = {}, cb) => {
+      if (findPlayerBySocket(socket.id)) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Leave the player session before opening projector mode." });
+        }
+        return;
+      }
+      const c = String(code || "")
+        .toUpperCase()
+        .trim();
+      const sess = findSessionByCode(c);
+      if (!sess) {
+        if (typeof cb === "function") cb({ ok: false, error: "Session not found." });
+        return;
+      }
+      if (!sess.projectors) sess.projectors = [];
+      sess.projectors = sess.projectors.filter((x) => x.socketId !== socket.id);
+      sess.projectors.push({ id: nanoid(8), socketId: socket.id });
+      socket.join(sess.code);
+      if (typeof cb === "function") cb({ ok: true, code: sess.code });
+      socket.emit("session_state", sessionSnapshotForProjector(sess));
+    });
+
     socket.on("add_custom_prompt", ({ text } = {}, cb) => {
-      const found = findSessionBySocket(socket.id);
+      const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
         return;
@@ -531,7 +609,7 @@ function startServer() {
     });
 
     socket.on("remove_custom_prompt", ({ index } = {}, cb) => {
-      const found = findSessionBySocket(socket.id);
+      const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
         return;
@@ -557,7 +635,7 @@ function startServer() {
     });
 
     socket.on("start_game", (_, cb) => {
-      const found = findSessionBySocket(socket.id);
+      const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
         return;
@@ -618,7 +696,7 @@ function startServer() {
     });
 
     socket.on("submit_answers", ({ answers } = {}, cb) => {
-      const found = findSessionBySocket(socket.id);
+      const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
         return;
@@ -654,7 +732,7 @@ function startServer() {
     });
 
     socket.on("vote", ({ choice } = {}, cb) => {
-      const found = findSessionBySocket(socket.id);
+      const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
         return;
@@ -704,7 +782,14 @@ function startServer() {
     });
 
     socket.on("disconnect", () => {
-      const found = findSessionBySocket(socket.id);
+      const proj = findProjectorBySocket(socket.id);
+      if (proj) {
+        proj.sess.projectors = (proj.sess.projectors || []).filter(
+          (x) => x.socketId !== socket.id
+        );
+        return;
+      }
+      const found = findPlayerBySocket(socket.id);
       if (!found) return;
       const { sess, player } = found;
       if (sess.phase === "lobby") {

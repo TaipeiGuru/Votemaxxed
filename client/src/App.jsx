@@ -58,7 +58,7 @@ function MogOverlay({ payload, onDone }) {
   );
 }
 
-function VoteDistribution({ breakdown, mog }) {
+function VoteDistribution({ breakdown, mog, projector }) {
   if (!breakdown) return null;
   const { promptText, answerAText, answerBText, authorAName, authorBName, votersForA, votersForB } =
     breakdown;
@@ -80,7 +80,7 @@ function VoteDistribution({ breakdown, mog }) {
 
   return (
     <div
-      className="vote-distribution"
+      className={`vote-distribution${projector ? " vote-distribution--projector" : ""}`}
       style={{
         marginTop: "1.25rem",
         padding: "1rem",
@@ -162,6 +162,165 @@ function VoteDistribution({ breakdown, mog }) {
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProjectorView({ session, showVoteDistribution }) {
+  const code = session?.code ?? "";
+  const lobby = session?.phase === "lobby";
+  const answering = session?.phase === "answering";
+  const showdown = session?.phase === "showdown";
+  const ended = session?.phase === "ended";
+  const sd = session?.showdown;
+  const progress = session?.answerProgress ?? { done: [], waiting: [] };
+
+  const votingLive = showdown && sd && !sd.reviewActive && !sd.splashActive;
+
+  return (
+    <div className="projector-root">
+      <header className="projector-top">
+        <div>
+          <p className="projector-kicker">Votemaxxed · Projector</p>
+          <p className="projector-code">{code}</p>
+        </div>
+        <p className="projector-phase-label muted">
+          {lobby && "Waiting for the host"}
+          {answering && "Players are writing answers"}
+          {showdown && !sd?.splashActive && "Showdown"}
+          {showdown && sd?.splashActive && "Next round"}
+          {ended && "Game over"}
+        </p>
+      </header>
+
+      {lobby && (
+        <div className="projector-card">
+          <h2 className="projector-card-title">Lobby</h2>
+          <p className="muted projector-lead">
+            {session.players?.length ?? 0} player
+            {(session.players?.length ?? 0) === 1 ? "" : "s"} connected. The host will start
+            when ready.
+          </p>
+          <ul className="projector-player-list">
+            {session.players?.map((p) => (
+              <li key={p.id}>
+                <span className="projector-player-name">{p.name}</span>
+                {p.id === session.hostPlayerId ? (
+                  <span className="muted"> · host</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {answering && (
+        <div className="projector-card projector-answering">
+          <h2 className="projector-card-title">Answer status</h2>
+          <p className="muted projector-lead">
+            Each player must save answers for both prompts they were assigned.
+          </p>
+          <div className="projector-answering-grid">
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading ready">Ready</h3>
+              <ul className="projector-name-list">
+                {progress.done?.length ? (
+                  progress.done.map((p) => (
+                    <li key={p.id}>{p.name}</li>
+                  ))
+                ) : (
+                  <li className="muted">No one yet</li>
+                )}
+              </ul>
+            </section>
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading waiting">Still writing</h3>
+              <ul className="projector-name-list">
+                {progress.waiting?.length ? (
+                  progress.waiting.map((p) => (
+                    <li key={p.id}>{p.name}</li>
+                  ))
+                ) : (
+                  <li className="muted">Everyone is ready</li>
+                )}
+              </ul>
+            </section>
+          </div>
+          {session.allAnswersIn && (
+            <p className="projector-all-in">All answers in — showdown starting…</p>
+          )}
+        </div>
+      )}
+
+      {showdown && sd && (
+        <div className="projector-card projector-showdown">
+          {votingLive && (
+            <>
+              <h2 className="projector-prompt">{sd.promptText}</h2>
+              <div className="projector-answers-row">
+                <div className="projector-answer-panel" aria-label="Choice A">
+                  <p className="projector-answer-text">{sd.answerA}</p>
+                </div>
+                <div className="projector-answer-panel" aria-label="Choice B">
+                  <p className="projector-answer-text">{sd.answerB}</p>
+                </div>
+              </div>
+              <p className="muted projector-vote-meta">
+                Votes {sd.votesCast ?? 0} / {sd.votesNeeded ?? 0}
+              </p>
+            </>
+          )}
+
+          {sd.reviewActive && !showVoteDistribution && (
+            <div className="projector-pending-result">
+              <h2 className="projector-prompt">{sd.promptText}</h2>
+              <p className="muted">Resolving this round…</p>
+            </div>
+          )}
+
+          {showVoteDistribution && session.lastResult?.voteBreakdown && (
+            <VoteDistribution
+              breakdown={session.lastResult.voteBreakdown}
+              mog={!!session.lastResult.mog}
+              projector
+            />
+          )}
+        </div>
+      )}
+
+      {ended && (
+        <div className="projector-card">
+          <h2 className="projector-card-title">Game over</h2>
+          {showVoteDistribution && session.lastResult?.voteBreakdown && (
+            <VoteDistribution
+              breakdown={session.lastResult.voteBreakdown}
+              mog={!!session.lastResult.mog}
+              projector
+            />
+          )}
+          {session.winner && (
+            <p className="projector-winner-line">
+              {session.winner.names?.join(" · ")} —{" "}
+              <strong>{session.winner.score?.toFixed(1)}</strong> pts
+            </p>
+          )}
+          <h3 className="projector-scores-title">Final scores</h3>
+          <ul className="projector-score-list">
+            {session.players
+              ?.map((p) => ({
+                ...p,
+                score: session.scores?.[p.id] ?? 0,
+              }))
+              .sort((a, b) => b.score - a.score)
+              .map((p) => (
+                <li key={p.id}>
+                  <span>{p.name}</span>
+                  <span className="projector-score-val">{p.score.toFixed(1)}</span>
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -315,6 +474,13 @@ export default function App() {
     );
   }, [socket, codeInput, name]);
 
+  const joinAsProjector = useCallback(() => {
+    setError("");
+    socket.emit("join_projector", { code: codeInput.trim() }, (res) => {
+      if (!res?.ok) setError(res?.error || "Could not open projector mode.");
+    });
+  }, [socket, codeInput]);
+
   const startGame = useCallback(() => {
     setError("");
     socket.emit("start_game", {}, (res) => {
@@ -400,21 +566,24 @@ export default function App() {
   }, [showdown, session]);
 
   const displayCode = session?.code;
+  const isProjector = session?.role === "projector";
 
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&
     (session?.phase === "ended" || voteRevealVisible);
 
   return (
-    <div className="layout">
-      <header style={{ marginBottom: "1.75rem" }}>
-        <h1 style={{ fontSize: "2.35rem", letterSpacing: "-0.02em" }}>
-          Votemaxxed
-        </h1>
-        <p className="muted" style={{ margin: 0, fontSize: "0.95rem" }}>
-          Are you a true votemaxxer? Use your creativity to avoid getting answermogged.
-        </p>
-      </header>
+    <div className={`layout${isProjector ? " layout--projector" : ""}`}>
+      {!isProjector && (
+        <header style={{ marginBottom: "1.75rem" }}>
+          <h1 style={{ fontSize: "2.35rem", letterSpacing: "-0.02em" }}>
+            Votemaxxed
+          </h1>
+          <p className="muted" style={{ margin: 0, fontSize: "0.95rem" }}>
+            Are you a true votemaxxer? Use your creativity to avoid getting answermogged.
+          </p>
+        </header>
+      )}
 
       {mogPayload && (
         <MogOverlay
@@ -496,12 +665,34 @@ export default function App() {
               >
                 Join session
               </button>
+              <button
+                type="button"
+                onClick={joinAsProjector}
+                disabled={!codeInput.trim()}
+                style={{
+                  marginTop: "0.5rem",
+                  width: "100%",
+                  background: "transparent",
+                  color: "var(--accent)",
+                  border: "1px solid var(--accent-dim)",
+                }}
+              >
+                Project
+              </button>
+              <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
+                Project: enter the code above, then open a TV or second display — does not
+                count as a player.
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {session && lobby && (
+      {isProjector && session && (
+        <ProjectorView session={session} showVoteDistribution={showVoteDistribution} />
+      )}
+
+      {session && !isProjector && lobby && (
         <div className="card">
           <p className="muted" style={{ margin: "0 0 0.5rem" }}>
             Session code
@@ -649,7 +840,7 @@ export default function App() {
         </div>
       )}
 
-      {session && answering && (
+      {session && !isProjector && answering && (
         <div className="card">
           <h2>Write your answers</h2>
           <p className="muted">
@@ -713,7 +904,7 @@ export default function App() {
         </div>
       )}
 
-      {session && showdown && session.showdown && (
+      {session && !isProjector && showdown && session.showdown && (
         <div className="card">
           {/*<p className="muted" style={{ margin: "0 0 0.25rem" }}>
             Showdown{" "}
@@ -781,25 +972,12 @@ export default function App() {
               No eligible voters this round (edge case).
             </p>
           )}
-
-          {showVoteDistribution && session.phase === "showdown" && (
-            <VoteDistribution
-              breakdown={session.lastResult.voteBreakdown}
-              mog={!!session.lastResult.mog}
-            />
-          )}
         </div>
       )}
 
-      {session && ended && (
+      {session && !isProjector && ended && (
         <div className="card">
           <h2>Game over</h2>
-          {showVoteDistribution && (
-            <VoteDistribution
-              breakdown={session.lastResult.voteBreakdown}
-              mog={!!session.lastResult.mog}
-            />
-          )}
           {session.winner && (
             <>
               <p style={{ fontSize: "1.25rem", margin: "0.75rem 0" }}>
