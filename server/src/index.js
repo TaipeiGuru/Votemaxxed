@@ -188,6 +188,7 @@ function sessionSnapshot(sess, forPlayerId) {
       sess.showdownVotes[sess.currentQueueIndex]?.[forPlayerId] ?? null;
 
     const voteCounts = tallyVotes(sess, sd);
+    const { votersForA, votersForB } = liveVoterRowsForShowdown(sess, sd);
     const lastResult =
       sess.lastShowdownResult &&
       (sess.lastShowdownResult.queueIndex < sess.currentQueueIndex ||
@@ -213,6 +214,8 @@ function sessionSnapshot(sess, forPlayerId) {
         votesCast: Object.keys(sess.showdownVotes[queueIndex] || {}).length,
         votesNeeded: eligibleVoters.length,
         voteCounts,
+        votersForA,
+        votersForB,
         myVote,
         reviewActive: !!sess.showdownReviewActive,
         splashActive: !!sess.showdownSplashActive,
@@ -254,6 +257,21 @@ function tallyVotes(sess, sd) {
     else if (v === "B") b++;
   }
   return { A: a, B: b, authorA: authors[0], authorB: authors[1] };
+}
+
+/** Eligible voters who have cast A/B, in session roster order (for projector live lists). */
+function liveVoterRowsForShowdown(sess, sd) {
+  const votes = sess.showdownVotes[sess.currentQueueIndex] || {};
+  const authors = sd.authorIds;
+  const votersForA = [];
+  const votersForB = [];
+  for (const p of sess.players) {
+    if (authors.includes(p.id)) continue;
+    const c = votes[p.id];
+    if (c === "A") votersForA.push({ id: p.id, name: p.name });
+    else if (c === "B") votersForB.push({ id: p.id, name: p.name });
+  }
+  return { votersForA, votersForB };
 }
 
 function findPlayerBySocket(socketId) {

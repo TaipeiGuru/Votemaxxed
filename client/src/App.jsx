@@ -58,6 +58,75 @@ function MogOverlay({ payload, onDone }) {
   );
 }
 
+function projectorVoterChipEntries(voters) {
+  if (!voters?.length) return [];
+  if (typeof voters[0] === "string") {
+    return voters.map((name, i) => ({ key: `${name}-${i}`, name }));
+  }
+  return voters.map((v) => ({ key: v.id, name: v.name }));
+}
+
+/** Shared projector layout: two answer panels + voter chips below (voting and breakdown). */
+function ProjectorDualAnswerColumns({
+  showAuthors,
+  authorAName,
+  authorBName,
+  answerA,
+  answerB,
+  votersForA,
+  votersForB,
+  rowClassName = "",
+}) {
+  const left = projectorVoterChipEntries(votersForA);
+  const right = projectorVoterChipEntries(votersForB);
+  return (
+    <div className={`projector-answers-row${rowClassName ? ` ${rowClassName}` : ""}`}>
+      <div className="projector-answer-stack">
+        <div
+          className="projector-answer-panel"
+          aria-label={showAuthors ? `Answer by ${authorAName}` : "Choice A"}
+        >
+          {showAuthors ? (
+            <p className="muted vote-distribution-author">{authorAName}</p>
+          ) : null}
+          <p className="projector-answer-text">{answerA}</p>
+        </div>
+        <div
+          className="projector-voters projector-voters--a"
+          aria-label="Voters for this answer"
+        >
+          {left.map((v) => (
+            <span key={v.key} className="projector-voter-chip">
+              {v.name}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="projector-answer-stack">
+        <div
+          className="projector-answer-panel"
+          aria-label={showAuthors ? `Answer by ${authorBName}` : "Choice B"}
+        >
+          {showAuthors ? (
+            <p className="muted vote-distribution-author">{authorBName}</p>
+          ) : null}
+          <p className="projector-answer-text">{answerB}</p>
+        </div>
+        <div
+          className="projector-voters projector-voters--b"
+          aria-label="Voters for this answer"
+        >
+          {right.map((v) => (
+            <span key={v.key} className="projector-voter-chip">
+              {v.name}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VoteDistribution({ breakdown, mog, projector }) {
   if (!breakdown) return null;
   const { promptText, answerAText, answerBText, authorAName, authorBName, votersForA, votersForB } =
@@ -104,64 +173,77 @@ function VoteDistribution({ breakdown, mog, projector }) {
           MOGGED — unanimous win for this round.
         </p>
       )}
-      <div
-        style={{
-          display: "grid",
-          gap: "0.85rem",
-          gridTemplateColumns: "1fr 1fr",
-        }}
-      >
+      {projector ? (
+        <ProjectorDualAnswerColumns
+          showAuthors
+          authorAName={authorAName}
+          authorBName={authorBName}
+          answerA={String(answerAText ?? "")}
+          answerB={String(answerBText ?? "")}
+          votersForA={votersForA ?? []}
+          votersForB={votersForB ?? []}
+          rowClassName="vote-distribution-projector-row"
+        />
+      ) : (
         <div
           style={{
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "0.75rem",
-            minWidth: 0,
+            display: "grid",
+            gap: "0.85rem",
+            gridTemplateColumns: "1fr 1fr",
           }}
         >
-          <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
-            {authorAName}
-          </p>
-          <textarea
-            readOnly
-            aria-label={`Answer by ${authorAName}`}
-            value={String(answerAText ?? "").slice(0, 50)}
-            rows={3}
-            maxLength={50}
-            style={answerDisplayStyle}
-          />
-          <p style={{ margin: 0, fontSize: "0.88rem" }}>
-            <strong>{votersForA.length}</strong> vote{votersForA.length === 1 ? "" : "s"}
-            {votersForA.length > 0 ? ": " : ""}
-            <span className="muted">{list(votersForA)}</span>
-          </p>
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "0.75rem",
+              minWidth: 0,
+            }}
+          >
+            <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
+              {authorAName}
+            </p>
+            <textarea
+              readOnly
+              aria-label={`Answer by ${authorAName}`}
+              value={String(answerAText ?? "").slice(0, 50)}
+              rows={3}
+              maxLength={50}
+              style={answerDisplayStyle}
+            />
+            <p style={{ margin: 0, fontSize: "0.88rem" }}>
+              <strong>{votersForA.length}</strong> vote{votersForA.length === 1 ? "" : "s"}
+              {votersForA.length > 0 ? ": " : ""}
+              <span className="muted">{list(votersForA)}</span>
+            </p>
+          </div>
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius)",
+              padding: "0.75rem",
+              minWidth: 0,
+            }}
+          >
+            <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
+              {authorBName}
+            </p>
+            <textarea
+              readOnly
+              aria-label={`Answer by ${authorBName}`}
+              value={String(answerBText ?? "").slice(0, 50)}
+              rows={3}
+              maxLength={50}
+              style={answerDisplayStyle}
+            />
+            <p style={{ margin: 0, fontSize: "0.88rem" }}>
+              <strong>{votersForB.length}</strong> vote{votersForB.length === 1 ? "" : "s"}
+              {votersForB.length > 0 ? ": " : ""}
+              <span className="muted">{list(votersForB)}</span>
+            </p>
+          </div>
         </div>
-        <div
-          style={{
-            border: "1px solid var(--border)",
-            borderRadius: "var(--radius)",
-            padding: "0.75rem",
-            minWidth: 0,
-          }}
-        >
-          <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
-            {authorBName}
-          </p>
-          <textarea
-            readOnly
-            aria-label={`Answer by ${authorBName}`}
-            value={String(answerBText ?? "").slice(0, 50)}
-            rows={3}
-            maxLength={50}
-            style={answerDisplayStyle}
-          />
-          <p style={{ margin: 0, fontSize: "0.88rem" }}>
-            <strong>{votersForB.length}</strong> vote{votersForB.length === 1 ? "" : "s"}
-            {votersForB.length > 0 ? ": " : ""}
-            <span className="muted">{list(votersForB)}</span>
-          </p>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -175,22 +257,31 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const sd = session?.showdown;
   const progress = session?.answerProgress ?? { done: [], waiting: [] };
 
-  const votingLive = showdown && sd && !sd.reviewActive && !sd.splashActive;
+  const breakdownVisible =
+    !!session?.lastResult?.voteBreakdown && showVoteDistribution;
 
   return (
     <div className="projector-root">
       <header className="projector-top">
-        <div>
+        <div className="projector-brand">
           <p className="projector-kicker">Votemaxxed</p>
-          <p className="projector-code">{code}</p>
+          {(lobby ||
+            answering ||
+            (showdown && sd?.splashActive) ||
+            ended) && (
+            <p className="projector-phase-label muted">
+              {lobby && "Waiting for the host"}
+              {answering && "Players are writing answers"}
+              {showdown && sd?.splashActive && "Next round"}
+              {ended && "Game over"}
+            </p>
+          )}
         </div>
-        <p className="projector-phase-label muted">
-          {lobby && "Waiting for the host"}
-          {answering && "Players are writing answers"}
-          {showdown && !sd?.splashActive && "Showdown"}
-          {showdown && sd?.splashActive && "Next round"}
-          {ended && "Game over"}
-        </p>
+        {code ? (
+          <p className="projector-code" aria-label="Session code">
+            {code}
+          </p>
+        ) : null}
       </header>
 
       {lobby && (
@@ -261,39 +352,31 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
-      {showdown && sd && (
+      {showdown && sd && !sd.splashActive && (
         <div className="projector-card projector-showdown">
-          {votingLive && (
-            <>
-              <h2 className="projector-prompt">{sd.promptText}</h2>
-              <div className="projector-answers-row">
-                <div className="projector-answer-panel" aria-label="Choice A">
-                  <p className="projector-answer-text">{sd.answerA}</p>
-                </div>
-                <div className="projector-answer-panel" aria-label="Choice B">
-                  <p className="projector-answer-text">{sd.answerB}</p>
-                </div>
-              </div>
-              <p className="muted projector-vote-meta">
-                Votes {sd.votesCast ?? 0} / {sd.votesNeeded ?? 0}
-              </p>
-            </>
-          )}
-
-          {sd.reviewActive && !showVoteDistribution && (
-            <div className="projector-pending-result">
-              <h2 className="projector-prompt">{sd.promptText}</h2>
-              <p className="muted">Resolving this round…</p>
-            </div>
-          )}
-
-          {showVoteDistribution && session.lastResult?.voteBreakdown && (
-            <VoteDistribution
-              breakdown={session.lastResult.voteBreakdown}
-              mog={!!session.lastResult.mog}
-              projector
-            />
-          )}
+          <h2 className="projector-prompt">{sd.promptText}</h2>
+          {breakdownVisible && session.lastResult?.mog ? (
+            <p
+              style={{
+                margin: "0 auto 1rem",
+                maxWidth: "56rem",
+                textAlign: "center",
+                fontSize: "clamp(0.88rem, 1.6vw, 1rem)",
+                color: "var(--accent-dim)",
+              }}
+            >
+              MOGGED — unanimous win for this round.
+            </p>
+          ) : null}
+          <ProjectorDualAnswerColumns
+            showAuthors={breakdownVisible}
+            authorAName={session.lastResult?.voteBreakdown?.authorAName}
+            authorBName={session.lastResult?.voteBreakdown?.authorBName}
+            answerA={sd.answerA}
+            answerB={sd.answerB}
+            votersForA={sd.votersForA ?? []}
+            votersForB={sd.votersForB ?? []}
+          />
         </div>
       )}
 
@@ -781,7 +864,9 @@ export default function App() {
               <button
                 type="button"
                 onClick={joinSession}
-                disabled={codeInput.trim().length !== 4}
+                disabled={
+                  codeInput.trim().length !== 4 || !name.trim()
+                }
                 style={{
                   marginTop: "0.75rem",
                   width: "100%",
@@ -1250,11 +1335,6 @@ export default function App() {
 
       {session && !isProjector && showdown && session.showdown && (
         <div className="card">
-          {/*<p className="muted" style={{ margin: "0 0 0.25rem" }}>
-            Showdown{" "}
-            {session.showdown.queueIndex + 1} / {session.showdown.totalShowdowns}{" "}
-            · Pass {session.showdown.passNumber}/{session.showdown.passesTotal}
-          </p>*/}
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
           </h2>
