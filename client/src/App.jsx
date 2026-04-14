@@ -166,7 +166,7 @@ function VoteDistribution({ breakdown, mog, projector }) {
   );
 }
 
-function ProjectorView({ session, showVoteDistribution }) {
+function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, answerTimeLimitSec }) {
   const code = session?.code ?? "";
   const lobby = session?.phase === "lobby";
   const answering = session?.phase === "answering";
@@ -181,7 +181,7 @@ function ProjectorView({ session, showVoteDistribution }) {
     <div className="projector-root">
       <header className="projector-top">
         <div>
-          <p className="projector-kicker">Votemaxxed · Projector</p>
+          <p className="projector-kicker">Votemaxxed</p>
           <p className="projector-code">{code}</p>
         </div>
         <p className="projector-phase-label muted">
@@ -217,6 +217,15 @@ function ProjectorView({ session, showVoteDistribution }) {
       {answering && (
         <div className="projector-card projector-answering">
           <h2 className="projector-card-title">Answer status</h2>
+          <p
+            style={{
+              margin: "0 0 0.6rem",
+              fontWeight: 700,
+              color: answerTimeRemainingSec <= 10 ? "var(--danger)" : "var(--accent)",
+            }}
+          >
+            Time left: {answerTimeRemainingSec}s / {answerTimeLimitSec}s
+          </p>
           <p className="muted projector-lead">
             Each player must save answers for both prompts they were assigned.
           </p>
@@ -368,6 +377,7 @@ export default function App() {
   const socket = useSocket();
   const [name, setName] = useState("");
   const [codeInput, setCodeInput] = useState("");
+  const [showProjectInfo, setShowProjectInfo] = useState(false);
   const [session, setSession] = useState(null);
   const [error, setError] = useState("");
   const [answers, setAnswers] = useState({});
@@ -379,17 +389,22 @@ export default function App() {
   const [chudPayload, setChudPayload] = useState(null);
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
+  const [answerTimeLeftMs, setAnswerTimeLeftMs] = useState(0);
   const pendingVoteRevealRef = useRef(null);
   const altRejectTimerRef = useRef(null);
+  const latestSessionRef = useRef(null);
+  const latestAnswersRef = useRef({});
 
   useEffect(() => {
     function onState(s) {
       if (s.phase === "gone") {
         setSession(null);
+        latestSessionRef.current = null;
         setError(s.message || "Session ended.");
         return;
       }
       setSession(s);
+      latestSessionRef.current = s;
       setError("");
     }
     function onMog(p) {
@@ -414,15 +429,30 @@ export default function App() {
         altRejectTimerRef.current = null;
       }, 3000);
     }
+    function onAnswerTimeUp() {
+      const s = latestSessionRef.current;
+      if (!s || s.phase !== "answering") return;
+      if (s.myAnswersSubmitted) return;
+      setAnswersSaveStatus("saving");
+      socket.emit("submit_answers", { answers: latestAnswersRef.current || {} }, (res) => {
+        if (!res?.ok) {
+          setAnswersSaveStatus(null);
+          return;
+        }
+        setAnswersSaveStatus("saved");
+      });
+    }
     socket.on("session_state", onState);
     socket.on("unanimous_victory", onMog);
     socket.on("chud_overlay", onChud);
     socket.on("alternate_prompt_rejected", onAltRejected);
+    socket.on("answer_time_up", onAnswerTimeUp);
     return () => {
       socket.off("session_state", onState);
       socket.off("unanimous_victory", onMog);
       socket.off("chud_overlay", onChud);
       socket.off("alternate_prompt_rejected", onAltRejected);
+      socket.off("answer_time_up", onAnswerTimeUp);
       if (altRejectTimerRef.current) {
         clearTimeout(altRejectTimerRef.current);
         altRejectTimerRef.current = null;
@@ -513,6 +543,16 @@ export default function App() {
     });
   }, [socket]);
 
+  const setAnswerTimeLimit = useCallback(
+    (seconds) => {
+      setError("");
+      socket.emit("set_answer_time_limit", { seconds }, (res) => {
+        if (!res?.ok) setError(res?.error || "Could not update answer timer.");
+      });
+    },
+    [socket]
+  );
+
   const addCustomPrompt = useCallback(() => {
     setError("");
     socket.emit("add_custom_prompt", { text: customPromptDraft }, (res) => {
@@ -596,8 +636,25 @@ export default function App() {
   }, [session?.phase, session?.answersMine, myPrompts]);
 
   useEffect(() => {
+    latestAnswersRef.current = answers;
+  }, [answers]);
+
+  useEffect(() => {
     if (session?.phase !== "answering") setAnswersSaveStatus(null);
   }, [session?.phase]);
+
+  useEffect(() => {
+    if (session?.phase !== "answering" || !session?.answeringEndsAt) {
+      setAnswerTimeLeftMs(0);
+      return;
+    }
+    const tick = () => {
+      setAnswerTimeLeftMs(Math.max(0, session.answeringEndsAt - Date.now()));
+    };
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [session?.phase, session?.answeringEndsAt]);
 
   useEffect(() => {
     if (session?.phase !== "answering") {
@@ -637,6 +694,8 @@ export default function App() {
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&
     (session?.phase === "ended" || voteRevealVisible);
+  const answerTimeLimitSec = session?.answerTimeLimitSec ?? 75;
+  const answerTimeRemainingSec = Math.ceil(answerTimeLeftMs / 1000);
 
   return (
     <div className={`layout${isProjector ? " layout--projector" : ""}`}>
@@ -699,6 +758,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={createSession}
+                disabled={!name.trim()}
                 style={{
                   background: "linear-gradient(135deg, var(--accent), #c9a22e)",
                   color: "#1a1408",
@@ -721,47 +781,82 @@ export default function App() {
               <button
                 type="button"
                 onClick={joinSession}
+                disabled={codeInput.trim().length !== 4}
                 style={{
                   marginTop: "0.75rem",
                   width: "100%",
                   background: "var(--surface)",
                   color: "var(--text)",
-                  border: "1px solid var(--border)",
+                  border: "1px solid #DDD",
                 }}
               >
                 Join session
               </button>
-              <button
-                type="button"
-                onClick={joinAsProjector}
-                disabled={!codeInput.trim()}
+              <div
                 style={{
                   marginTop: "0.5rem",
-                  width: "100%",
-                  background: "transparent",
-                  color: "var(--accent)",
-                  border: "1px solid var(--accent-dim)",
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: "0.5rem",
+                  alignItems: "center",
                 }}
               >
-                Project
-              </button>
-              <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
-                Project: enter the code above, then open a TV or second display — does not
-                count as a player.
-              </p>
+                <button
+                  type="button"
+                  onClick={joinAsProjector}
+                  style={{
+                    width: "100%",
+                    background: "transparent",
+                    color: "var(--accent)",
+                    border: "1px solid var(--accent-dim)",
+                  }}
+                >
+                  Project
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowProjectInfo((v) => !v)}
+                  aria-label="Project mode info"
+                  title="Project mode info"
+                  style={{
+                    width: "2.25rem",
+                    height: "2.25rem",
+                    padding: 0,
+                    borderRadius: "999px",
+                    fontSize: "1rem",
+                    fontWeight: 700,
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    color: "var(--muted)",
+                    lineHeight: 1,
+                  }}
+                >
+                  ?
+                </button>
+              </div>
+              {showProjectInfo && (
+                <p className="muted" style={{ marginTop: "0.5rem", fontSize: "0.82rem" }}>
+                  Provide a code to project an existing session, or leave it blank to project an empty session.
+                </p>
+              )}
             </div>
           </div>
         </div>
       )}
 
       {isProjector && session && (
-        <ProjectorView session={session} showVoteDistribution={showVoteDistribution} />
+        <ProjectorView
+          session={session}
+          showVoteDistribution={showVoteDistribution}
+          answerTimeRemainingSec={answerTimeRemainingSec}
+          answerTimeLimitSec={answerTimeLimitSec}
+        />
       )}
 
       {session && !isProjector && lobby && (
         <div className="card">
           <p className="muted" style={{ margin: "0 0 0.5rem" }}>
-            Session code
+            Game code
           </p>
           <p
             style={{
@@ -798,7 +893,7 @@ export default function App() {
               </h2>
               <p className="muted" style={{ margin: "0 0 0.75rem", fontSize: "0.9rem" }}>
                 {isHost
-                  ? `These are guaranteed to appear (up to ${session.maxCustomPrompts ?? 0}, one per player). The rest are random from the built-in list.`
+                  ? `These are guaranteed to appear (up to one per player).`
                   : "The host chose these — they will appear in the game."}
               </p>
               {session.customPrompts?.length > 0 ? (
@@ -886,6 +981,38 @@ export default function App() {
             </div>
           )}
 
+          {isHost && (
+            <div style={{ marginBottom: "1rem" }}>
+              <h2 style={{ fontSize: "1.15rem", marginBottom: "0.35rem" }}>
+                Answer timer
+              </h2>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {[60, 75, 90].map((seconds) => (
+                  <button
+                    key={seconds}
+                    type="button"
+                    onClick={() => setAnswerTimeLimit(seconds)}
+                    style={{
+                      padding: "0.45rem 0.8rem",
+                      background:
+                        answerTimeLimitSec === seconds
+                          ? "linear-gradient(135deg, var(--accent), #c9a22e)"
+                          : "var(--surface)",
+                      color: answerTimeLimitSec === seconds ? "#1a1408" : "var(--text)",
+                      border:
+                        answerTimeLimitSec === seconds
+                          ? "1px solid var(--accent)"
+                          : "1px solid #fff",
+                    }}
+             
+                  >
+                    {seconds}s
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {isHost ? (
             <button
               type="button"
@@ -909,6 +1036,15 @@ export default function App() {
       {session && !isProjector && answering && (
         <div className="card">
           <h2>Write your answers</h2>
+          <p
+            style={{
+              margin: "0.25rem 0 0.6rem",
+              fontWeight: 700,
+              color: answerTimeRemainingSec <= 10 ? "var(--danger)" : "var(--accent)",
+            }}
+          >
+            Time left: {answerTimeRemainingSec}s
+          </p>
           {altRejectWarning && (
             <p
               role="status"
@@ -1062,10 +1198,11 @@ export default function App() {
                 value={answers[String(p.index)] ?? ""}
                 style={{ marginTop: "0.9rem" }}
                 onChange={(e) => {
+                  const nextText = e.target.value;
                   setAnswersSaveStatus(null);
                   setAnswers((prev) => ({
                     ...prev,
-                    [String(p.index)]: e.target.value,
+                    [String(p.index)]: nextText,
                   }));
                 }}
                 maxLength={50}

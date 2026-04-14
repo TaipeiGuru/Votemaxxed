@@ -16,6 +16,9 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
 /** How many full passes over all prompts (spec: "after 2 rounds"). */
 const SHOWDOWN_PASSES = 2;
+const ANSWER_TIME_OPTIONS_SEC = [60, 75, 90];
+const DEFAULT_ANSWER_TIME_SEC = 75;
+const ANSWER_TIMEUP_SUBMIT_GRACE_MS = 1200;
 
 /** Time vote distribution stays on screen before advancing (after mog/chud when applicable). */
 const VOTE_DISTRIBUTION_REVIEW_MS = 7500;
@@ -120,10 +123,12 @@ function sessionSnapshot(sess, forPlayerId) {
   };
 
   if (sess.phase === "lobby") {
+    const isHostViewer = forPlayerId && forPlayerId === sess.hostPlayerId;
     return {
       ...base,
-      customPrompts: [...(sess.customPrompts || [])],
+      customPrompts: isHostViewer ? [...(sess.customPrompts || [])] : [],
       maxCustomPrompts: sess.players.length,
+      answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
     };
   }
 
@@ -143,6 +148,7 @@ function sessionSnapshot(sess, forPlayerId) {
   }
 
   if (sess.phase === "answering") {
+    const submitted = new Set(sess.answerSubmittedBy || []);
     return {
       ...base,
       promptsMeta,
@@ -150,6 +156,9 @@ function sessionSnapshot(sess, forPlayerId) {
       answersMine,
       allAnswersIn: isAllAnswersIn(sess),
       promptAlt: publicPromptAltState(sess),
+      answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
+      answeringEndsAt: sess.answeringEndsAt ?? null,
+      myAnswersSubmitted: submitted.has(forPlayerId),
     };
   }
 
@@ -222,15 +231,8 @@ function sessionSnapshot(sess, forPlayerId) {
 }
 
 function isAllAnswersIn(sess) {
-  const n = sess.gamePrompts.length;
-  for (let i = 0; i < n; i++) {
-    const authors = sess.assignments[i].authorIds;
-    for (const aid of authors) {
-      const t = sess.answers[String(i)]?.[aid];
-      if (!t || !String(t).trim()) return false;
-    }
-  }
-  return true;
+  const submitted = new Set(sess.answerSubmittedBy || []);
+  return submitted.size >= sess.players.length;
 }
 
 function getCurrentShowdown(sess) {
@@ -271,13 +273,8 @@ function findProjectorBySocket(socketId) {
 }
 
 function playerHasBothAnswersSaved(sess, playerId) {
-  const promptIndices = sess.assignments
-    .filter((a) => a.authorIds.includes(playerId))
-    .map((a) => a.promptIndex);
-  return promptIndices.every((i) => {
-    const t = sess.answers[String(i)]?.[playerId];
-    return t && String(t).trim();
-  });
+  const submitted = new Set(sess.answerSubmittedBy || []);
+  return submitted.has(playerId);
 }
 
 function computeAnswerProgress(sess) {
@@ -328,6 +325,29 @@ function clearShowdownTimers(sess) {
     clearTimeout(sess._nextVoteSplashTimer);
     sess._nextVoteSplashTimer = null;
   }
+}
+
+function clearAnsweringTimer(sess) {
+  if (sess._answeringTimer) {
+    clearTimeout(sess._answeringTimer);
+    sess._answeringTimer = null;
+  }
+  if (sess._answeringFinalizeTimer) {
+    clearTimeout(sess._answeringFinalizeTimer);
+    sess._answeringFinalizeTimer = null;
+  }
+}
+
+function beginShowdownFromAnswering(sess) {
+  clearAnsweringTimer(sess);
+  clearShowdownTimers(sess);
+  sess.showdownReviewActive = false;
+  sess.showdownSplashActive = false;
+  sess.phase = "showdown";
+  sess.currentQueueIndex = 0;
+  sess.showdownVotes = {};
+  sess.answeringEndsAt = null;
+  skipShowdownsWithNoVoters(sess);
 }
 
 function bumpShowdownQueueAndMaybeEnd(sess) {
@@ -552,6 +572,7 @@ function startServer() {
         projectors: [],
         phase: "lobby",
         customPrompts: [],
+        answerTimeLimitSec: DEFAULT_ANSWER_TIME_SEC,
       };
       sessions.set(code, sess);
       socket.join(code);
@@ -587,6 +608,9 @@ function startServer() {
       }
       const playerId = nanoid(12);
       sess.players.push({ id: playerId, name: playerName, socketId: socket.id });
+      if (!sess.hostPlayerId) {
+        sess.hostPlayerId = playerId;
+      }
       socket.join(sess.code);
       if (typeof cb === "function") cb({ ok: true, code: sess.code, playerId });
       broadcastSession(sess);
@@ -602,6 +626,24 @@ function startServer() {
       const c = String(code || "")
         .toUpperCase()
         .trim();
+      if (!c) {
+        let newCode = genCode();
+        while (sessions.has(newCode)) newCode = genCode();
+        const sess = {
+          code: newCode,
+          hostPlayerId: null,
+          players: [],
+          projectors: [{ id: nanoid(8), socketId: socket.id }],
+          phase: "lobby",
+          customPrompts: [],
+          answerTimeLimitSec: DEFAULT_ANSWER_TIME_SEC,
+        };
+        sessions.set(newCode, sess);
+        socket.join(sess.code);
+        if (typeof cb === "function") cb({ ok: true, code: sess.code, created: true });
+        socket.emit("session_state", sessionSnapshotForProjector(sess));
+        return;
+      }
       const sess = findSessionByCode(c);
       if (!sess) {
         if (typeof cb === "function") cb({ ok: false, error: "Session not found." });
@@ -611,8 +653,33 @@ function startServer() {
       sess.projectors = sess.projectors.filter((x) => x.socketId !== socket.id);
       sess.projectors.push({ id: nanoid(8), socketId: socket.id });
       socket.join(sess.code);
-      if (typeof cb === "function") cb({ ok: true, code: sess.code });
+      if (typeof cb === "function") cb({ ok: true, code: sess.code, created: false });
       socket.emit("session_state", sessionSnapshotForProjector(sess));
+    });
+
+    socket.on("set_answer_time_limit", ({ seconds } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (player.id !== sess.hostPlayerId) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only the host can set timer." });
+        return;
+      }
+      if (sess.phase !== "lobby") {
+        if (typeof cb === "function") cb({ ok: false, error: "Timer can only be changed in lobby." });
+        return;
+      }
+      const s = Number(seconds);
+      if (!ANSWER_TIME_OPTIONS_SEC.includes(s)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid timer option." });
+        return;
+      }
+      sess.answerTimeLimitSec = s;
+      if (typeof cb === "function") cb({ ok: true });
+      broadcastSession(sess);
     });
 
     socket.on("add_custom_prompt", ({ text } = {}, cb) => {
@@ -737,6 +804,37 @@ function startServer() {
       }
       sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
       sess.phase = "answering";
+      sess.answerSubmittedBy = [];
+      const answerLimitSec = sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC;
+      sess.answeringEndsAt = Date.now() + answerLimitSec * 1000;
+      clearAnsweringTimer(sess);
+      const code = sess.code;
+      sess._answeringTimer = setTimeout(() => {
+        const s = sessions.get(code);
+        if (!s || s.phase !== "answering") return;
+        s._answeringTimer = null;
+        const io2 = globalThis.__io;
+        if (io2) io2.to(s.code).emit("answer_time_up");
+        s._answeringFinalizeTimer = setTimeout(() => {
+          const s2 = sessions.get(code);
+          if (!s2 || s2.phase !== "answering") return;
+          s2._answeringFinalizeTimer = null;
+          for (const p of s2.players) {
+            if ((s2.answerSubmittedBy || []).includes(p.id)) continue;
+            const mine = s2.assignments
+              .filter((a) => a.authorIds.includes(p.id))
+              .map((a) => String(a.promptIndex));
+            for (const key of mine) {
+              const text = String(s2.answers?.[key]?.[p.id] ?? "").slice(0, 50);
+              if (!s2.answers[key]) s2.answers[key] = {};
+              s2.answers[key][p.id] = text;
+            }
+            s2.answerSubmittedBy.push(p.id);
+          }
+          beginShowdownFromAnswering(s2);
+          broadcastSession(s2);
+        }, ANSWER_TIMEUP_SUBMIT_GRACE_MS);
+      }, answerLimitSec * 1000);
 
       const showdownQueue = [];
       for (let pass = 0; pass < SHOWDOWN_PASSES; pass++) {
@@ -776,17 +874,15 @@ function startServer() {
         if (!sess.answers[key]) sess.answers[key] = {};
         sess.answers[key][player.id] = text;
       }
+      if (!Array.isArray(sess.answerSubmittedBy)) sess.answerSubmittedBy = [];
+      if (!sess.answerSubmittedBy.includes(player.id)) {
+        sess.answerSubmittedBy.push(player.id);
+      }
       if (typeof cb === "function") cb({ ok: true });
       broadcastSession(sess);
 
       if (isAllAnswersIn(sess)) {
-        clearShowdownTimers(sess);
-        sess.showdownReviewActive = false;
-        sess.showdownSplashActive = false;
-        sess.phase = "showdown";
-        sess.currentQueueIndex = 0;
-        sess.showdownVotes = {};
-        skipShowdownsWithNoVoters(sess);
+        beginShowdownFromAnswering(sess);
         broadcastSession(sess);
       }
     });
@@ -1009,6 +1105,9 @@ function startServer() {
         proj.sess.projectors = (proj.sess.projectors || []).filter(
           (x) => x.socketId !== socket.id
         );
+        if ((proj.sess.players?.length || 0) === 0 && (proj.sess.projectors?.length || 0) === 0) {
+          sessions.delete(proj.sess.code);
+        }
         return;
       }
       const found = findPlayerBySocket(socket.id);
@@ -1025,6 +1124,7 @@ function startServer() {
           broadcastSession(sess);
         }
       } else {
+        clearAnsweringTimer(sess);
         clearShowdownTimers(sess);
         sessions.delete(sess.code);
         io.to(sess.code).emit("session_state", {

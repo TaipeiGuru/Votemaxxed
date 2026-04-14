@@ -550,3 +550,18 @@ label {
 .layout--projector .next-vote-splash-card {
   padding: clamp(2rem, 4vw, 3rem);
 }
+
+.layout--projector .mog-card {
+  width: min(92vw, 1280px);
+  max-width: 1280px;
+  padding: clamp(2rem, 4vw, 3.25rem);
+}
+
+.layout--projector .mog-title {
+  font-size: clamp(3rem, 6vw, 5rem);
+}
+
+.layout--projector .mog-sub {
+  max-width: none;
+  font-size: clamp(1.15rem, 2.2vw, 1.6rem);
+}
