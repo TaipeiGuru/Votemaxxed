@@ -372,6 +372,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [answers, setAnswers] = useState({});
   const [altPromptVisible, setAltPromptVisible] = useState({});
+  const [altRejectWarning, setAltRejectWarning] = useState("");
   /** null | 'saving' | 'saved' */
   const [answersSaveStatus, setAnswersSaveStatus] = useState(null);
   const [mogPayload, setMogPayload] = useState(null);
@@ -379,6 +380,7 @@ export default function App() {
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
   const pendingVoteRevealRef = useRef(null);
+  const altRejectTimerRef = useRef(null);
 
   useEffect(() => {
     function onState(s) {
@@ -396,13 +398,35 @@ export default function App() {
     function onChud(p) {
       setChudPayload(p);
     }
+    function onAltRejected(payload) {
+      const by = payload?.rejectedByName || "the other author";
+      const key = String(payload?.promptIndex ?? "");
+      if (key) {
+        setAltPromptVisible((prev) => ({
+          ...prev,
+          [key]: false,
+        }));
+      }
+      setAltRejectWarning(`Alternate prompt rejected by ${by}.`);
+      if (altRejectTimerRef.current) clearTimeout(altRejectTimerRef.current);
+      altRejectTimerRef.current = setTimeout(() => {
+        setAltRejectWarning("");
+        altRejectTimerRef.current = null;
+      }, 3000);
+    }
     socket.on("session_state", onState);
     socket.on("unanimous_victory", onMog);
     socket.on("chud_overlay", onChud);
+    socket.on("alternate_prompt_rejected", onAltRejected);
     return () => {
       socket.off("session_state", onState);
       socket.off("unanimous_victory", onMog);
       socket.off("chud_overlay", onChud);
+      socket.off("alternate_prompt_rejected", onAltRejected);
+      if (altRejectTimerRef.current) {
+        clearTimeout(altRejectTimerRef.current);
+        altRejectTimerRef.current = null;
+      }
     };
   }, [socket]);
 
@@ -529,6 +553,26 @@ export default function App() {
     [socket]
   );
 
+  const acceptAlternatePrompt = useCallback(
+    (promptIndex) => {
+      setError("");
+      socket.emit("accept_alternate_prompt", { promptIndex }, (res) => {
+        if (!res?.ok) setError(res?.error || "Could not accept alternate prompt.");
+      });
+    },
+    [socket]
+  );
+
+  const rejectAlternatePrompt = useCallback(
+    (promptIndex) => {
+      setError("");
+      socket.emit("reject_alternate_prompt", { promptIndex }, (res) => {
+        if (!res?.ok) setError(res?.error || "Could not reject alternate prompt.");
+      });
+    },
+    [socket]
+  );
+
   const vote = useCallback(
     (choice) => {
       socket.emit("vote", { choice }, (res) => {
@@ -556,7 +600,14 @@ export default function App() {
   }, [session?.phase]);
 
   useEffect(() => {
-    if (session?.phase !== "answering") setAltPromptVisible({});
+    if (session?.phase !== "answering") {
+      setAltPromptVisible({});
+      setAltRejectWarning("");
+      if (altRejectTimerRef.current) {
+        clearTimeout(altRejectTimerRef.current);
+        altRejectTimerRef.current = null;
+      }
+    }
   }, [session?.phase]);
 
   useEffect(() => {
@@ -858,26 +909,64 @@ export default function App() {
       {session && !isProjector && answering && (
         <div className="card">
           <h2>Write your answers</h2>
-          <p className="muted">
-            You have two prompts. Everyone gets two — each prompt is shared by two
-            players.
-          </p>
-          {myPrompts.map((p) => (
-            <div key={p.index} style={{ marginTop: "1.25rem" }}>
-              <label htmlFor={`a-${p.index}`}>{p.text}</label>
-              {session?.promptAlt?.[String(p.index)]?.swapped && (
-                <p className="muted" style={{ margin: "0.35rem 0 0" }}>
-                  Prompt switched to the alternate (locked).
+          {altRejectWarning && (
+            <p
+              role="status"
+              aria-live="assertive"
+              style={{
+                marginTop: "1rem",
+                color: "var(--danger)",
+                fontWeight: 700,
+              }}
+            >
+              {altRejectWarning}
+            </p>
+          )}
+          {myPrompts.map((p) => {
+            const key = String(p.index);
+            const st = session?.promptAlt?.[key] || {};
+            const requestedBy = st.requestedBy || [];
+            const otherAuthor = (p.authorIds || []).find((id) => id !== session?.you) || null;
+            const otherRequested = otherAuthor ? requestedBy.includes(otherAuthor) : false;
+            const youRequested = requestedBy.includes(session?.you);
+            const incomingRequest =
+              otherRequested && !youRequested && !st.swapped && !st.locked;
+            const showAlt = !!altPromptVisible[key] || incomingRequest;
+            const canRequest = !st.swapped && !st.locked && !youRequested && !!st.altText;
+            const rejectedByOther = !!(st.locked && st.rejectedBy && st.rejectedBy !== session?.you);
+            return (
+            <div
+              key={p.index}
+              style={{
+                marginTop: "1.25rem",
+                padding: incomingRequest ? "0.75rem" : 0,
+                border: incomingRequest ? "1px solid var(--accent)" : "none",
+                borderRadius: incomingRequest ? "var(--radius)" : 0,
+                background: incomingRequest ? "rgba(232, 197, 71, 0.08)" : "transparent",
+              }}
+            >
+              <p style={{ margin: "0 0 0.35rem" }}>{p.text}</p>
+              {st.swapped && (
+                <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.74em", fontStyle: "italic" }}>
+                  Alternate prompt used.
+                </p>
+           
+              )}
+              {!st.swapped && st.locked && (
+                <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.74em", fontStyle: "italic" }}>
+                  {rejectedByOther
+                    ? "Alternate request rejected."
+                    : "Alternate prompt locked."}
                 </p>
               )}
-              {!session?.promptAlt?.[String(p.index)]?.swapped && (
+              {!st.swapped && !st.locked && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
                   <button
                     type="button"
                     onClick={() =>
                       setAltPromptVisible((prev) => ({
                         ...prev,
-                        [String(p.index)]: !prev[String(p.index)],
+                        [key]: !prev[key],
                       }))
                     }
                     style={{
@@ -888,68 +977,90 @@ export default function App() {
                       color: "var(--muted)",
                     }}
                   >
-                    {altPromptVisible[String(p.index)] ? "Hide alternate prompt" : "See alternate prompt"}
+                    {showAlt ? "Hide alternate prompt" : "Show alternate prompt"}
                   </button>
-                  {altPromptVisible[String(p.index)] && (
-                    <button
-                      type="button"
-                      onClick={() => requestAlternatePrompt(p.index)}
-                      disabled={
-                        (session?.promptAlt?.[String(p.index)]?.requestedBy || []).includes(session?.you)
-                      }
-                      style={{
-                        padding: "0.4rem 0.7rem",
-                        fontSize: "0.85rem",
-                        background: "var(--surface)",
-                        border: "1px solid var(--accent-dim)",
-                        color: "var(--accent)",
-                      }}
-                    >
-                      Request this prompt
-                    </button>
+                  {incomingRequest ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => acceptAlternatePrompt(p.index)}
+                        style={{
+                          padding: "0.4rem 0.7rem",
+                          fontSize: "0.85rem",
+                          background: "var(--surface)",
+                          border: "1px solid var(--ok)",
+                          color: "var(--ok)",
+                        }}
+                      >
+                        Accept swap
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => rejectAlternatePrompt(p.index)}
+                        style={{
+                          padding: "0.4rem 0.7rem",
+                          fontSize: "0.85rem",
+                          background: "var(--surface)",
+                          border: "1px solid var(--danger)",
+                          color: "var(--danger)",
+                        }}
+                      >
+                        Reject swap
+                      </button>
+                    </>
+                  ) : (
+                    showAlt && (
+                      <button
+                        type="button"
+                        onClick={() => requestAlternatePrompt(p.index)}
+                        disabled={!canRequest}
+                        style={{
+                          padding: "0.4rem 0.7rem",
+                          fontSize: "0.85rem",
+                          background: "var(--surface)",
+                          border: "1px solid var(--accent-dim)",
+                          color: "var(--accent)",
+                        }}
+                      >
+                        Request alternate prompt
+                      </button>
+                    )
                   )}
                 </div>
               )}
-              {altPromptVisible[String(p.index)] &&
-                !session?.promptAlt?.[String(p.index)]?.swapped && (
-                  <div
-                    style={{
-                      marginTop: "0.75rem",
-                      padding: "0.75rem",
-                      borderRadius: "var(--radius)",
-                      border: "1px solid var(--border)",
-                      background: "rgba(139, 149, 168, 0.06)",
-                    }}
-                  >
-                    <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem" }}>
-                      Alternate prompt
-                    </p>
-                    <p style={{ margin: 0 }}>
-                      {session?.promptAlt?.[String(p.index)]?.altText || "—"}
-                    </p>
-                    {(() => {
-                      const st = session?.promptAlt?.[String(p.index)];
-                      const requestedBy = st?.requestedBy || [];
-                      const otherAuthor = (p.authorIds || []).find((id) => id !== session?.you) || null;
-                      const otherRequested = otherAuthor ? requestedBy.includes(otherAuthor) : false;
-                      const youRequested = requestedBy.includes(session?.you);
-                      return (
-                        <p className="muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
-                          {youRequested ? "You requested this." : "You have not requested this."}{" "}
-                          {otherAuthor
-                            ? otherRequested
-                              ? "The other author requested it too."
-                              : "Waiting on the other author."
-                            : null}
-                        </p>
-                      );
-                    })()}
-                  </div>
-                )}
+              {showAlt && !st.swapped && (
+                <div
+                  style={{
+                    marginTop: "0.75rem",
+                    padding: "0.75rem",
+                    borderRadius: "var(--radius)",
+                    border: incomingRequest ? "1px solid var(--accent)" : "1px solid var(--border)",
+                    background: incomingRequest
+                      ? "rgba(232, 197, 71, 0.08)"
+                      : "rgba(139, 149, 168, 0.06)",
+                  }}
+                >
+                  {/*<p className="muted" style={{ margin: "0.5rem 0 0", fontSize: "0.82rem" }}>
+                    {incomingRequest
+                      ? "The other author requested this swap. Accept or reject below."
+                      : youRequested
+                      ? "You requested this. Waiting on the other author."
+                      : "You have not requested this yet."}
+                  </p>*/}
+                  <p style={{ margin: 0 }}>
+                    {st.altText || "—"}
+                  </p>
+                  <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.82rem", fontStyle: "italic" }}>
+                    Alternate prompt
+                  </p>
+             
+                </div>
+              )}
               <input
                 id={`a-${p.index}`}
                 type="text"
                 value={answers[String(p.index)] ?? ""}
+                style={{ marginTop: "0.9rem" }}
                 onChange={(e) => {
                   setAnswersSaveStatus(null);
                   setAnswers((prev) => ({
@@ -961,7 +1072,7 @@ export default function App() {
                 autoComplete="off"
               />
             </div>
-          ))}
+          )})}
           <div
             style={{
               marginTop: "1.25rem",

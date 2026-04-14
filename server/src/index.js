@@ -79,6 +79,8 @@ function publicPromptAltState(sess) {
     out[key] = {
       altText: sess.alternatePrompts?.[key] ?? "",
       swapped: !!sess.promptAltSwapped?.[key],
+      locked: !!sess.promptAltLocked?.[key],
+      rejectedBy: sess.promptAltRejectedBy?.[key] ?? null,
       requestedBy: [...(sess.promptAltRequestedBy?.[key] || [])],
     };
   }
@@ -724,10 +726,14 @@ function startServer() {
       sess.alternatePrompts = buildUniqueAlternatePrompts(sess.gamePrompts);
       sess.promptAltRequestedBy = {};
       sess.promptAltSwapped = {};
+      sess.promptAltLocked = {};
+      sess.promptAltRejectedBy = {};
       for (let i = 0; i < sess.gamePrompts.length; i++) {
         const key = String(i);
         sess.promptAltRequestedBy[key] = [];
         sess.promptAltSwapped[key] = false;
+        sess.promptAltLocked[key] = false;
+        sess.promptAltRejectedBy[key] = null;
       }
       sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
       sess.phase = "answering";
@@ -806,6 +812,15 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Prompt already switched." });
         return;
       }
+      if (sess.promptAltLocked?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Alternate request is locked." });
+        return;
+      }
+      const alt = sess.alternatePrompts?.[key];
+      if (!alt || !String(alt).trim()) {
+        if (typeof cb === "function") cb({ ok: false, error: "No alternate prompt available." });
+        return;
+      }
       const authors = sess.assignments[i]?.authorIds || [];
       if (!authors.includes(player.id)) {
         if (typeof cb === "function") cb({ ok: false, error: "Only authors can request a swap." });
@@ -813,25 +828,128 @@ function startServer() {
       }
       if (!sess.promptAltRequestedBy) sess.promptAltRequestedBy = {};
       if (!sess.promptAltRequestedBy[key]) sess.promptAltRequestedBy[key] = [];
-      if (!sess.promptAltRequestedBy[key].includes(player.id)) {
-        sess.promptAltRequestedBy[key].push(player.id);
-      }
-
       const req = sess.promptAltRequestedBy[key];
-      const bothRequested = authors.every((aid) => req.includes(aid));
-      if (bothRequested) {
-        const alt = sess.alternatePrompts?.[key];
-        if (alt && String(alt).trim()) {
-          sess.gamePrompts[i].text = alt;
-          sess.promptAltSwapped[key] = true;
-        } else {
-          if (typeof cb === "function") cb({ ok: false, error: "No alternate prompt available." });
-          broadcastSession(sess);
-          return;
+      if (req.includes(player.id)) {
+        if (typeof cb === "function") cb({ ok: true, pending: true });
+        broadcastSession(sess);
+        return;
+      }
+      if (req.length > 0 && !req.includes(player.id)) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Other author already requested. Accept or reject the request." });
         }
+        broadcastSession(sess);
+        return;
+      }
+      sess.promptAltRequestedBy[key] = [player.id];
+      sess.promptAltRejectedBy[key] = null;
+
+      if (typeof cb === "function") cb({ ok: true, pending: true });
+      broadcastSession(sess);
+    });
+
+    socket.on("accept_alternate_prompt", ({ promptIndex } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "answering") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
+        return;
+      }
+      const i = Number(promptIndex);
+      if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
+        return;
+      }
+      const key = String(i);
+      if (sess.promptAltSwapped?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Prompt already switched." });
+        return;
+      }
+      if (sess.promptAltLocked?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Alternate request is locked." });
+        return;
+      }
+      const authors = sess.assignments[i]?.authorIds || [];
+      if (!authors.includes(player.id)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only authors can accept a swap." });
+        return;
+      }
+      const req = sess.promptAltRequestedBy?.[key] || [];
+      const requester = req[0] || null;
+      if (!requester || requester === player.id || !authors.includes(requester)) {
+        if (typeof cb === "function") cb({ ok: false, error: "No pending request to accept." });
+        return;
+      }
+      const alt = sess.alternatePrompts?.[key];
+      if (!alt || !String(alt).trim()) {
+        if (typeof cb === "function") cb({ ok: false, error: "No alternate prompt available." });
+        return;
+      }
+      sess.gamePrompts[i].text = alt;
+      sess.promptAltSwapped[key] = true;
+      sess.promptAltLocked[key] = true;
+      sess.promptAltRequestedBy[key] = [requester, player.id];
+
+      if (typeof cb === "function") cb({ ok: true, swapped: true });
+      broadcastSession(sess);
+    });
+
+    socket.on("reject_alternate_prompt", ({ promptIndex } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "answering") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
+        return;
+      }
+      const i = Number(promptIndex);
+      if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
+        return;
+      }
+      const key = String(i);
+      if (sess.promptAltSwapped?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Prompt already switched." });
+        return;
+      }
+      if (sess.promptAltLocked?.[key]) {
+        if (typeof cb === "function") cb({ ok: false, error: "Alternate request is locked." });
+        return;
+      }
+      const authors = sess.assignments[i]?.authorIds || [];
+      if (!authors.includes(player.id)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only authors can reject a swap." });
+        return;
+      }
+      const req = sess.promptAltRequestedBy?.[key] || [];
+      const requester = req[0] || null;
+      if (!requester || requester === player.id || !authors.includes(requester)) {
+        if (typeof cb === "function") cb({ ok: false, error: "No pending request to reject." });
+        return;
       }
 
-      if (typeof cb === "function") cb({ ok: true, swapped: !!sess.promptAltSwapped?.[key] });
+      sess.promptAltLocked[key] = true;
+      sess.promptAltRejectedBy[key] = player.id;
+      sess.promptAltRequestedBy[key] = [requester];
+
+      const requesterSocketId = sess.players.find((p) => p.id === requester)?.socketId;
+      const rejectorName = sess.players.find((p) => p.id === player.id)?.name || "The other player";
+      const io = globalThis.__io;
+      if (io && requesterSocketId) {
+        io.to(requesterSocketId).emit("alternate_prompt_rejected", {
+          promptIndex: i,
+          rejectedByName: rejectorName,
+        });
+      }
+
+      if (typeof cb === "function") cb({ ok: true, rejected: true });
       broadcastSession(sess);
     });
 
