@@ -14,8 +14,8 @@ import { buildAssignments, scoreShowdown, isUnanimous } from "./gameLogic.js";
 const PORT = Number(process.env.PORT) || 3001;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
 
-/** How many full passes over all prompts (spec: "after 2 rounds"). */
-const SHOWDOWN_PASSES = 2;
+/** How many full passes over all prompts. */
+const SHOWDOWN_PASSES = 1;
 const ANSWER_TIME_OPTIONS_SEC = [60, 75, 90];
 const DEFAULT_ANSWER_TIME_SEC = 75;
 const ANSWER_TIMEUP_SUBMIT_GRACE_MS = 1200;
@@ -26,6 +26,8 @@ const VOTE_DISTRIBUTION_REVIEW_MS = 7500;
 const OVERLAY_BEFORE_REVIEW_MS = 3600;
 /** Splash between vote distribution and the next prompt. */
 const NEXT_VOTE_SPLASH_MS = 3000;
+const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
+const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
 
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
@@ -178,6 +180,7 @@ function sessionSnapshot(sess, forPlayerId) {
     const queueIndex = sess.currentQueueIndex;
     const promptIndex = sd.promptIndex;
     const authors = sd.authorIds;
+    const foldedAuthorIds = getFoldedAuthorIds(sess, sd);
     const answerA = sess.answers[String(promptIndex)]?.[authors[0]] ?? "";
     const answerB = sess.answers[String(promptIndex)]?.[authors[1]] ?? "";
     const eligibleVoters = sess.players
@@ -219,6 +222,20 @@ function sessionSnapshot(sess, forPlayerId) {
         myVote,
         reviewActive: !!sess.showdownReviewActive,
         splashActive: !!sess.showdownSplashActive,
+        bothFolded: foldedAuthorIds.length === 2,
+        foldedAuthorIds,
+        bothFoldStartsAt:
+          sess.bothFoldTimeline?.queueIndex === queueIndex
+            ? sess.bothFoldTimeline.startsAt
+            : null,
+        bothFoldEndsAt:
+          sess.bothFoldTimeline?.queueIndex === queueIndex
+            ? sess.bothFoldTimeline.endsAt
+            : null,
+        bothFoldAuthorIds:
+          sess.bothFoldTimeline?.queueIndex === queueIndex
+            ? [...(sess.bothFoldTimeline.foldedAuthorIds || [])]
+            : [],
         everyoneVoted:
           eligibleVoters.length === 0 ||
           Object.keys(sess.showdownVotes[queueIndex] || {}).length ===
@@ -245,6 +262,17 @@ function getCurrentShowdown(sess) {
     promptIndex,
     authorIds: [...sess.assignments[promptIndex].authorIds],
   };
+}
+
+function getFoldedAuthorIds(sess, sd = getCurrentShowdown(sess)) {
+  const promptIndex = sd.promptIndex;
+  const authors = sd.authorIds;
+  const answerA = String(sess.answers[String(promptIndex)]?.[authors[0]] ?? "").trim();
+  const answerB = String(sess.answers[String(promptIndex)]?.[authors[1]] ?? "").trim();
+  const folded = [];
+  if (answerA.length === 0) folded.push(authors[0]);
+  if (answerB.length === 0) folded.push(authors[1]);
+  return folded;
 }
 
 function tallyVotes(sess, sd) {
@@ -339,6 +367,10 @@ function clearShowdownTimers(sess) {
     clearTimeout(sess._showdownAdvanceTimer);
     sess._showdownAdvanceTimer = null;
   }
+  if (sess._bothFoldToSplashTimer) {
+    clearTimeout(sess._bothFoldToSplashTimer);
+    sess._bothFoldToSplashTimer = null;
+  }
   if (sess._nextVoteSplashTimer) {
     clearTimeout(sess._nextVoteSplashTimer);
     sess._nextVoteSplashTimer = null;
@@ -359,13 +391,30 @@ function clearAnsweringTimer(sess) {
 function beginShowdownFromAnswering(sess) {
   clearAnsweringTimer(sess);
   clearShowdownTimers(sess);
+  sess.bothFoldTimeline = null;
   sess.showdownReviewActive = false;
-  sess.showdownSplashActive = false;
+  sess.showdownSplashActive = true;
   sess.phase = "showdown";
   sess.currentQueueIndex = 0;
   sess.showdownVotes = {};
   sess.answeringEndsAt = null;
   skipShowdownsWithNoVoters(sess);
+  if (sess.phase !== "showdown") return;
+  const initialQueueIndex = sess.currentQueueIndex;
+  const code = sess.code;
+  sess._nextVoteSplashTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s) return;
+    s._nextVoteSplashTimer = null;
+    if (s.phase !== "showdown" || s.currentQueueIndex !== initialQueueIndex) {
+      broadcastSession(s);
+      return;
+    }
+    s.showdownSplashActive = false;
+    if (!maybeStartBothFoldAutoAdvance(s)) {
+      broadcastSession(s);
+    }
+  }, NEXT_VOTE_SPLASH_MS);
 }
 
 function bumpShowdownQueueAndMaybeEnd(sess) {
@@ -397,8 +446,59 @@ function clearLastShowdownResultIfStillVoting(sess) {
   }
 }
 
+function maybeStartBothFoldAutoAdvance(sess) {
+  if (
+    sess.phase !== "showdown" ||
+    sess.showdownReviewActive ||
+    sess.showdownSplashActive ||
+    sess.currentQueueIndex >= sess.showdownQueue.length
+  ) {
+    return false;
+  }
+
+  const sd = getCurrentShowdown(sess);
+  const foldedAuthorIds = getFoldedAuthorIds(sess, sd);
+  if (foldedAuthorIds.length === 0) return false;
+
+  clearShowdownTimers(sess);
+  const queueIndex = sess.currentQueueIndex;
+  const startsAt = Date.now() + BOTH_FOLD_OVERLAY_DELAY_MS;
+  const endsAt = startsAt + BOTH_FOLD_OVERLAY_DURATION_MS;
+  sess.bothFoldTimeline = { queueIndex, startsAt, endsAt, foldedAuthorIds };
+  const code = sess.code;
+  sess._bothFoldToSplashTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s) return;
+    s._bothFoldToSplashTimer = null;
+    if (s.phase !== "showdown" || s.currentQueueIndex !== queueIndex) return;
+    s.showdownReviewActive = false;
+    s.showdownSplashActive = true;
+    broadcastSession(s);
+    s._nextVoteSplashTimer = setTimeout(() => {
+      const s2 = sessions.get(code);
+      if (!s2) return;
+      s2._nextVoteSplashTimer = null;
+      s2.showdownSplashActive = false;
+      if (s2.phase !== "showdown" || s2.currentQueueIndex !== queueIndex) {
+        broadcastSession(s2);
+        return;
+      }
+      bumpShowdownQueueAndMaybeEnd(s2);
+      skipShowdownsWithNoVoters(s2);
+      clearLastShowdownResultIfStillVoting(s2);
+      if (!maybeStartBothFoldAutoAdvance(s2)) {
+        broadcastSession(s2);
+      }
+    }, NEXT_VOTE_SPLASH_MS);
+  }, BOTH_FOLD_OVERLAY_DELAY_MS + BOTH_FOLD_OVERLAY_DURATION_MS);
+  // Ensure clients see the active showdown state (blank answers) before the fold overlay delay.
+  broadcastSession(sess);
+  return true;
+}
+
 function scheduleShowdownQueueAdvance(sess, overlayPause) {
   clearShowdownTimers(sess);
+  sess.bothFoldTimeline = null;
   sess.showdownSplashActive = false;
   sess.showdownReviewActive = true;
   broadcastSession(sess);
@@ -429,7 +529,9 @@ function scheduleShowdownQueueAdvance(sess, overlayPause) {
       bumpShowdownQueueAndMaybeEnd(s2);
       skipShowdownsWithNoVoters(s2);
       clearLastShowdownResultIfStillVoting(s2);
-      broadcastSession(s2);
+      if (!maybeStartBothFoldAutoAdvance(s2)) {
+        broadcastSession(s2);
+      }
     }, NEXT_VOTE_SPLASH_MS);
   }, delay);
 }
@@ -1091,6 +1193,10 @@ function startServer() {
         return;
       }
       const sd = getCurrentShowdown(sess);
+      if (getFoldedAuthorIds(sess, sd).length > 0) {
+        if (typeof cb === "function") cb({ ok: false, error: "A player failed to answer this round." });
+        return;
+      }
       const authors = sd.authorIds;
       if (authors.includes(player.id)) {
         if (typeof cb === "function") cb({ ok: false, error: "Authors cannot vote." });
@@ -1109,11 +1215,15 @@ function startServer() {
       if (eligible.length > 0 && cast >= eligible.length) {
         advanceShowdown(sess);
         skipShowdownsWithNoVoters(sess);
-        broadcastSession(sess);
+        if (!maybeStartBothFoldAutoAdvance(sess)) {
+          broadcastSession(sess);
+        }
       } else if (eligible.length === 0) {
         advanceShowdown(sess);
         skipShowdownsWithNoVoters(sess);
-        broadcastSession(sess);
+        if (!maybeStartBothFoldAutoAdvance(sess)) {
+          broadcastSession(sess);
+        }
       }
     });
 

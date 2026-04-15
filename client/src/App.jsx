@@ -21,7 +21,7 @@ function MogOverlay({ payload, onDone, playSound = false }) {
       left: `${Math.random() * 100}%`,
       delay: `${Math.random() * 0.4}s`,
       duration: `${2.2 + Math.random() * 1.8}s`,
-      hue: Math.floor(Math.random() * 360),
+      hue: Math.floor(Math.random() * 360), 
     }))
   );
 
@@ -257,6 +257,94 @@ function VoteDistribution({ breakdown, mog, projector }) {
   );
 }
 
+function ProjectorScoreDropBoard({ players, scores, phaseKey }) {
+  const rows = useMemo(() => {
+    const scoreRows = (players ?? []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      score: Number(scores?.[p.id] ?? 0),
+    }));
+    scoreRows.sort((a, b) => {
+      if (a.score !== b.score) return a.score - b.score;
+      return a.name.localeCompare(b.name);
+    });
+    const uniqueScores = Array.from(new Set(scoreRows.map((r) => r.score)));
+    const groupByScore = new Map(uniqueScores.map((s, i) => [s, i]));
+    return scoreRows.map((r) => ({
+      ...r,
+      group: groupByScore.get(r.score) ?? 0,
+    }));
+  }, [players, scores]);
+
+  const [revealedGroup, setRevealedGroup] = useState(-1);
+  const [droppingIds, setDroppingIds] = useState([]);
+  const dropClearTimerRef = useRef(null);
+
+  useEffect(() => {
+    setRevealedGroup(-1);
+    setDroppingIds([]);
+  }, [phaseKey, rows.length]);
+
+  useEffect(() => {
+    if (!rows.length) return undefined;
+    const maxGroup = rows.reduce((max, r) => Math.max(max, r.group), -1);
+    if (revealedGroup >= maxGroup) return undefined;
+    const t = setTimeout(() => {
+      const nextGroup = revealedGroup + 1;
+      const nextDropIds = rows
+        .filter((r) => r.group === nextGroup)
+        .map((r) => r.id);
+      setDroppingIds(nextDropIds);
+      setRevealedGroup(nextGroup);
+    }, 1300);
+    return () => clearTimeout(t);
+  }, [revealedGroup, rows]);
+
+  useEffect(() => {
+    if (!droppingIds.length) return undefined;
+    if (dropClearTimerRef.current) clearTimeout(dropClearTimerRef.current);
+    dropClearTimerRef.current = setTimeout(() => {
+      setDroppingIds([]);
+      dropClearTimerRef.current = null;
+    }, 520);
+    return () => {
+      if (dropClearTimerRef.current) {
+        clearTimeout(dropClearTimerRef.current);
+        dropClearTimerRef.current = null;
+      }
+    };
+  }, [droppingIds]);
+
+  const visibleRows = rows.filter((r) => r.group <= revealedGroup);
+  const orderedVisible = [...visibleRows].sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    return a.name.localeCompare(b.name);
+  });
+  const topById = new Map(orderedVisible.map((r, i) => [r.id, i * 88]));
+
+  return (
+    <div className="projector-score-drop" aria-live="polite">
+      <div
+        className="projector-score-drop-stage"
+        style={{ height: `${Math.max(rows.length, 1) * 88}px` }}
+      >
+        {orderedVisible.map((row) => (
+          <div
+            key={row.id}
+            className={`projector-score-drop-row${
+              droppingIds.includes(row.id) ? " is-dropping" : ""
+            }`}
+            style={{ top: `${topById.get(row.id) ?? 0}px` }}
+          >
+            <span>{row.name}</span>
+            <span className="projector-score-drop-value">{row.score.toFixed(1)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, answerTimeLimitSec }) {
   const code = session?.code ?? "";
   const lobby = session?.phase === "lobby";
@@ -316,7 +404,6 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
 
       {answering && (
         <div className="projector-card projector-answering">
-          <h2 className="projector-card-title">Answer status</h2>
           <p
             style={{
               margin: "0 0 0.6rem",
@@ -324,10 +411,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
               color: answerTimeRemainingSec <= 10 ? "var(--danger)" : "var(--accent)",
             }}
           >
-            Time left: {answerTimeRemainingSec}s / {answerTimeLimitSec}s
-          </p>
-          <p className="muted projector-lead">
-            Each player must save answers for both prompts they were assigned.
+            Time left: {answerTimeRemainingSec}s
           </p>
           <div className="projector-answering-grid">
             <section className="projector-status-col">
@@ -391,48 +475,24 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
 
       {ended && (
         <div className="projector-card">
-          <h2 className="projector-card-title">Game over</h2>
-          {showVoteDistribution && session.lastResult?.voteBreakdown && (
-            <VoteDistribution
-              breakdown={session.lastResult.voteBreakdown}
-              mog={!!session.lastResult.mog}
-              projector
-            />
-          )}
-          {session.winner && (
-            <p className="projector-winner-line">
-              {session.winner.names?.join(" · ")} —{" "}
-              <strong>{session.winner.score?.toFixed(1)}</strong> pts
-            </p>
-          )}
-          <h3 className="projector-scores-title">Final scores</h3>
-          <ul className="projector-score-list">
-            {session.players
-              ?.map((p) => ({
-                ...p,
-                score: session.scores?.[p.id] ?? 0,
-              }))
-              .sort((a, b) => b.score - a.score)
-              .map((p) => (
-                <li key={p.id}>
-                  <span>{p.name}</span>
-                  <span className="projector-score-val">{p.score.toFixed(1)}</span>
-                </li>
-              ))}
-          </ul>
+          <ProjectorScoreDropBoard
+            players={session.players}
+            scores={session.scores}
+            phaseKey={`${session.code}-${session.phase}`}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function NextVoteSplash({ active }) {
+function NextVoteSplash({ active, text = "Get ready to vote..." }) {
   if (!active) return null;
   return (
     <div className="next-vote-splash" aria-live="polite">
       <div className="next-vote-splash-backdrop" />
       <div className="next-vote-splash-card">
-        <p className="next-vote-splash-text">Get ready for the next vote...</p>
+        <p className="next-vote-splash-text">{text}</p>
       </div>
     </div>
   );
@@ -465,6 +525,59 @@ function ChudOverlay({ payload, onDone }) {
   );
 }
 
+function BothFoldOverlay({ payload, onDone }) {
+  const [crossedOut, setCrossedOut] = useState(false);
+  const visiblePlayers =
+    payload?.foldedAuthorIds?.length === 1
+      ? payload.players.filter((player) => payload.foldedAuthorIds.includes(player.id))
+      : payload?.players ?? [];
+
+  useEffect(() => {
+    if (!payload) return undefined;
+    setCrossedOut(false);
+    const now = Date.now();
+    const crossDelay = Math.max(0, (payload.startsAt + 5000) - now);
+    const doneDelay = Math.max(0, payload.endsAt - now);
+    const crossTimer = setTimeout(() => setCrossedOut(true), crossDelay);
+    const doneTimer = setTimeout(onDone, doneDelay);
+    return () => {
+      clearTimeout(crossTimer);
+      clearTimeout(doneTimer);
+    };
+  }, [payload, onDone]);
+
+  if (!payload) return null;
+
+  return (
+    <div className="both-fold-overlay" aria-live="assertive">
+      <div className="both-fold-backdrop" />
+      <div className="both-fold-card">
+        <p className="both-fold-title">
+          {payload.foldedAuthorIds?.length === 1 ? "Chud Alert!" : "Battle of the Chuds"}
+        </p>
+        <p className="both-fold-copy">
+          {payload.foldedAuthorIds?.length === 1
+            ? "Someone was so afraid of getting answermogged that they folded under pressure."
+            : "Both players were so afraid of getting answermogged that they folded under pressure."}
+        </p>
+        <div className="both-fold-names">
+          {visiblePlayers.map((player, idx) => (
+            <p
+              key={`${idx}-${player.id}`}
+              className={`both-fold-name${
+                crossedOut && payload.foldedAuthorIds?.includes(player.id) ? " is-crossed" : ""
+              }`}
+            >
+              <span>{player.name}</span>
+              <span className="both-fold-subhuman">subhuman</span>
+            </p>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const socket = useSocket();
   const [name, setName] = useState("");
@@ -479,13 +592,17 @@ export default function App() {
   const [answersSaveStatus, setAnswersSaveStatus] = useState(null);
   const [mogPayload, setMogPayload] = useState(null);
   const [chudPayload, setChudPayload] = useState(null);
+  const [bothFoldPayload, setBothFoldPayload] = useState(null);
   const [customPromptDraft, setCustomPromptDraft] = useState("");
+  const [showCustomPromptInfo, setShowCustomPromptInfo] = useState(false);
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
   const [answerTimeLeftMs, setAnswerTimeLeftMs] = useState(0);
   const pendingVoteRevealRef = useRef(null);
   const altRejectTimerRef = useRef(null);
   const latestSessionRef = useRef(null);
   const latestAnswersRef = useRef({});
+  const bothFoldShownQueueRef = useRef(null);
+  const bothFoldStartTimerRef = useRef(null);
 
   useEffect(() => {
     function onState(s) {
@@ -596,6 +713,63 @@ export default function App() {
     session?.phase,
     session?.lastResult?.queueIndex,
     session?.lastResult?.overlayPause,
+  ]);
+
+  useEffect(() => {
+    if (session?.phase !== "showdown" || !session?.showdown) {
+      if (bothFoldStartTimerRef.current) {
+        clearTimeout(bothFoldStartTimerRef.current);
+        bothFoldStartTimerRef.current = null;
+      }
+      setBothFoldPayload(null);
+      bothFoldShownQueueRef.current = null;
+      return;
+    }
+
+    const sd = session.showdown;
+    const queueKey = String(sd.queueIndex ?? "");
+    const foldedAuthorIds = sd.bothFoldAuthorIds ?? sd.foldedAuthorIds ?? [];
+
+    if (!foldedAuthorIds.length || !queueKey || bothFoldShownQueueRef.current === queueKey) return;
+
+    const players = session.players ?? [];
+    const authorAName =
+      players.find((p) => p.id === sd.authorA)?.name ?? "Player A";
+    const authorBName =
+      players.find((p) => p.id === sd.authorB)?.name ?? "Player B";
+
+    bothFoldShownQueueRef.current = queueKey;
+    bothFoldStartTimerRef.current = setTimeout(() => {
+      setBothFoldPayload({
+        queueIndex: queueKey,
+        players: [
+          { id: sd.authorA, name: authorAName },
+          { id: sd.authorB, name: authorBName },
+        ],
+        foldedAuthorIds,
+        startsAt: Number(sd.bothFoldStartsAt || Date.now() + 1500),
+        endsAt: Number(sd.bothFoldEndsAt || Date.now() + 10500),
+      });
+      bothFoldStartTimerRef.current = null;
+    }, Math.max(0, Number(sd.bothFoldStartsAt || (Date.now() + 1500)) - Date.now()));
+
+    return () => {
+      if (bothFoldStartTimerRef.current) {
+        clearTimeout(bothFoldStartTimerRef.current);
+        bothFoldStartTimerRef.current = null;
+      }
+    };
+  }, [
+    session?.phase,
+    session?.showdown,
+    session?.showdown?.queueIndex,
+    session?.showdown?.foldedAuthorIds,
+    session?.showdown?.bothFoldAuthorIds,
+    session?.showdown?.bothFoldStartsAt,
+    session?.showdown?.bothFoldEndsAt,
+    session?.showdown?.authorA,
+    session?.showdown?.authorB,
+    session?.players,
   ]);
 
   const createSession = useCallback(() => {
@@ -776,16 +950,27 @@ export default function App() {
       eligible.includes(session.you) &&
       !d.myVote &&
       !d.reviewActive &&
-      !d.splashActive
+      !d.splashActive &&
+      !(d.foldedAuthorIds?.length > 0)
     );
   }, [showdown, session]);
 
   const displayCode = session?.code;
   const isProjector = session?.role === "projector";
+  const playerCount = session?.players?.length ?? 0;
+  const canStartGame = playerCount >= 3 && playerCount <= 10;
 
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&
     (session?.phase === "ended" || voteRevealVisible);
+  const isFinalShowdownSplash =
+    session?.phase === "showdown" &&
+    !!session?.showdown?.splashActive &&
+    Number(session?.showdown?.queueIndex) ===
+      Number(session?.showdown?.totalShowdowns) - 1;
+  const nextVoteSplashText = isFinalShowdownSplash
+    ? "let's see the answermaxxer leaderboard..."
+    : "Get ready to vote...";
   const answerTimeLimitSec = session?.answerTimeLimitSec ?? 75;
   const answerTimeRemainingSec = Math.ceil(answerTimeLeftMs / 1000);
 
@@ -815,7 +1000,16 @@ export default function App() {
           onDone={() => setChudPayload(null)}
         />
       )}
-      <NextVoteSplash active={!!session?.showdown?.splashActive} />
+      {isProjector && bothFoldPayload && (
+        <BothFoldOverlay
+          payload={bothFoldPayload}
+          onDone={() => setBothFoldPayload(null)}
+        />
+      )}
+      <NextVoteSplash
+        active={!!session?.showdown?.splashActive}
+        text={nextVoteSplashText}
+      />
 
       {error && (
         <div
@@ -983,14 +1177,44 @@ export default function App() {
                 borderTop: "1px solid var(--border)",
               }}
             >
-              <h2 style={{ fontSize: "1.15rem", marginBottom: "0.35rem" }}>
-                Custom prompts
-              </h2>
-              <p className="muted" style={{ margin: "0 0 0.75rem", fontSize: "0.9rem" }}>
-                {isHost
-                  ? `These are guaranteed to appear (up to one per player).`
-                  : "The host chose these — they will appear in the game."}
-              </p>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginBottom: "0.35rem",
+                }}
+              >
+                <h2 style={{ fontSize: "1.15rem", margin: 0 }}>
+                  Custom prompts
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowCustomPromptInfo((v) => !v)}
+                  aria-label="Custom prompts info"
+                  title="Custom prompts info"
+                  style={{
+                    width: "1.7rem",
+                    height: "1.7rem",
+                    padding: 0,
+                    borderRadius: "999px",
+                    fontSize: "0.9rem",
+                    fontWeight: 700,
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    color: "var(--muted)",
+                    lineHeight: 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  ?
+                </button>
+              </div>
+              {showCustomPromptInfo && (
+                <p className="muted" style={{ margin: "0 0 0.75rem", fontSize: "0.9rem" }}>
+                  These are guaranteed to appear (up to one per player).
+                </p>
+              )}
               {session.customPrompts?.length > 0 ? (
                 <ul
                   style={{
@@ -1040,7 +1264,6 @@ export default function App() {
                 (session.customPrompts?.length ?? 0) <
                   (session.maxCustomPrompts ?? 0) && (
                   <div>
-                    <label htmlFor="custom-prompt">New prompt</label>
                     <textarea
                       id="custom-prompt"
                       value={customPromptDraft}
@@ -1091,18 +1314,15 @@ export default function App() {
                       padding: "0.45rem 0.8rem",
                       background:
                         answerTimeLimitSec === seconds
-                          ? "linear-gradient(135deg, var(--accent), #c9a22e)"
+                          ? "#fff"
                           : "var(--surface)",
                       color: answerTimeLimitSec === seconds ? "#1a1408" : "var(--text)",
-                      border:
-                        answerTimeLimitSec === seconds
-                          ? "1px solid var(--accent)"
-                          : "1px solid #fff",
+                      border: "1px solid #fff"
                     }}
-             
                   >
                     {seconds}s
                   </button>
+             
                 ))}
               </div>
             </div>
@@ -1112,6 +1332,7 @@ export default function App() {
             <button
               type="button"
               onClick={startGame}
+              disabled={!canStartGame}
               style={{
                 background: "linear-gradient(135deg, var(--accent), #c9a22e)",
                 color: "#1a1408",
@@ -1343,7 +1564,11 @@ export default function App() {
         </div>
       )}
 
-      {session && !isProjector && showdown && session.showdown && (
+      {session &&
+        !isProjector &&
+        showdown &&
+        session.showdown &&
+        !session.showdown.splashActive && (
         <div className="card">
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
@@ -1395,7 +1620,11 @@ export default function App() {
 
           {!canVote && session.showdown.eligibleVoters?.length > 0 && (
             <p className="muted" style={{ marginTop: "1rem" }}>
-              {session.showdown.myVote
+              {session.showdown.bothFolded
+                ? "Both authors folded this round. No points awarded."
+                : session.showdown.foldedAuthorIds?.length === 1
+                ? "One author failed to answer this round. No voting."
+                : session.showdown.myVote
                 ? `You voted ${session.showdown.myVote}.`
                 : "You wrote one of these answers — sit tight."}
             </p>
@@ -1411,33 +1640,7 @@ export default function App() {
 
       {session && !isProjector && ended && (
         <div className="card">
-          <h2>Game over</h2>
-          {session.winner && (
-            <>
-              <p style={{ fontSize: "1.25rem", margin: "0.75rem 0" }}>
-                {session.winner.names?.join(" · ")} —{" "}
-                <strong>{session.winner.score?.toFixed(1)}</strong> pts
-              </p>
-              <p className="muted">
-                Cumulative score across all showdowns (two full passes over every
-                prompt).
-              </p>
-            </>
-          )}
-          <h3 style={{ marginTop: "1.5rem" }}>Final scores</h3>
-          <ul>
-            {session.players
-              ?.map((p) => ({
-                ...p,
-                score: session.scores?.[p.id] ?? 0,
-              }))
-              .sort((a, b) => b.score - a.score)
-              .map((p) => (
-                <li key={p.id}>
-                  {p.name}: {p.score.toFixed(1)}
-                </li>
-              ))}
-          </ul>
+          <p style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>scoremaxxer</p>
         </div>
       )}
     </div>

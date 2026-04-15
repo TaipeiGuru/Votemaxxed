@@ -281,6 +281,108 @@ label {
   line-height: 1.4;
 }
 
+/* Both players submitted blank answers */
+.both-fold-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 109;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.both-fold-backdrop {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgba(224, 93, 93, 0.25),
+    rgba(15, 17, 20, 0.88) 58%
+  );
+}
+
+.both-fold-card {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 2rem 2.25rem;
+  max-width: 580px;
+  margin: 0 1rem;
+  border: 1px solid rgba(224, 93, 93, 0.4);
+  border-radius: 20px;
+  background: rgba(15, 17, 20, 0.96);
+  box-shadow: 0 0 55px rgba(224, 93, 93, 0.24);
+  animation: mog-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.both-fold-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  letter-spacing: -0.01em;
+  color: #f29a9a;
+}
+
+.both-fold-copy {
+  margin: 0.95rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+
+.both-fold-names {
+  margin-top: 1.2rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.both-fold-name {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.both-fold-name span:first-child {
+  position: relative;
+  display: inline-block;
+}
+
+.both-fold-name span:first-child::after {
+  content: "";
+  position: absolute;
+  left: -2%;
+  top: 50%;
+  width: 0%;
+  border-top: 2px solid #f27d7d;
+  transform: translateY(-50%) rotate(-9deg);
+  transition: width 0.8s ease;
+}
+
+.both-fold-name.is-crossed span:first-child::after {
+  width: 104%;
+}
+
+.both-fold-subhuman {
+  opacity: 0;
+  color: #f27d7d;
+  font-size: 0.98rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transform: translateX(-6px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+
+.both-fold-name.is-crossed .both-fold-subhuman {
+  opacity: 1;
+  transform: translateX(0);
+}
+
 @keyframes chud-pulse {
   0%,
   100% {
@@ -584,6 +686,57 @@ label {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   color: var(--accent);
+}
+
+.projector-score-drop {
+  width: min(56rem, 100%);
+  margin: 0 auto;
+}
+
+.projector-score-drop-stage {
+  position: relative;
+}
+
+.projector-score-drop-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 1.1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+  font-weight: 700;
+  background: linear-gradient(
+    180deg,
+    rgba(24, 28, 34, 0.7) 0%,
+    rgba(24, 28, 34, 0.15) 100%
+  );
+  transition: top 0.46s cubic-bezier(0.2, 0.78, 0.26, 1), filter 0.25s ease;
+}
+
+.projector-score-drop-row.is-dropping {
+  animation: projector-score-drop-in 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  filter: brightness(1.08);
+}
+
+.projector-score-drop-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+@keyframes projector-score-drop-in {
+  from {
+    transform: translateY(-180px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .layout--projector .next-vote-splash-text {
