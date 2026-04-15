@@ -350,9 +350,18 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const lobby = session?.phase === "lobby";
   const answering = session?.phase === "answering";
   const showdown = session?.phase === "showdown";
+  const photoUpload = session?.phase === "photo_upload";
+  const photoCaptionTransition = session?.phase === "photo_caption_transition";
+  const photoCaptioning = session?.phase === "photo_captioning";
+  const photoVoteLoading = session?.phase === "photo_vote_loading";
+  const photoVoting = session?.phase === "photo_voting";
+  const photoDistributionLoading = session?.phase === "photo_distribution_loading";
+  const photoDistribution = session?.phase === "photo_distribution";
+  const photoEndTransition = session?.phase === "photo_end_transition";
   const ended = session?.phase === "ended";
   const sd = session?.showdown;
   const progress = session?.answerProgress ?? { done: [], waiting: [] };
+  const photoRound = session?.photoRound ?? null;
 
   const breakdownVisible =
     !!session?.lastResult?.voteBreakdown && showVoteDistribution;
@@ -365,11 +374,27 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
           {(lobby ||
             answering ||
             (showdown && sd?.splashActive) ||
+            photoUpload ||
+            photoCaptionTransition ||
+            photoCaptioning ||
+            photoVoteLoading ||
+            photoVoting ||
+            photoDistributionLoading ||
+            photoDistribution ||
+            photoEndTransition ||
             ended) && (
             <p className="projector-phase-label muted">
               {lobby && "Waiting for the host"}
               {answering && "Players are writing answers"}
               {showdown && sd?.splashActive && "Next round"}
+              {photoUpload && "Photo upload"}
+              {photoCaptionTransition && "Get ready to caption"}
+              {photoCaptioning && "Caption submission"}
+              {photoVoteLoading && "Preparing voting grid"}
+              {photoVoting && "Rank your favorites"}
+              {photoDistributionLoading && "Tallying votes"}
+              {photoDistribution && "Vote distribution"}
+              {photoEndTransition && "Final transition"}
               {ended && "Game over"}
             </p>
           )}
@@ -470,6 +495,137 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
             votersForA={sd.votersForA ?? []}
             votersForB={sd.votersForB ?? []}
           />
+        </div>
+      )}
+
+      {photoUpload && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Upload a photo</h2>
+          <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
+          <div className="projector-answering-grid">
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading ready">Uploaded</h3>
+              <ul className="projector-name-list">
+                {photoRound?.uploadProgress?.done?.length ? (
+                  photoRound.uploadProgress.done.map((p) => <li key={p.id}>{p.name}</li>)
+                ) : (
+                  <li className="muted">No uploads yet</li>
+                )}
+              </ul>
+            </section>
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading waiting">Waiting</h3>
+              <ul className="projector-name-list">
+                {photoRound?.uploadProgress?.waiting?.length ? (
+                  photoRound.uploadProgress.waiting.map((p) => <li key={p.id}>{p.name}</li>)
+                ) : (
+                  <li className="muted">Everyone uploaded</li>
+                )}
+              </ul>
+            </section>
+          </div>
+        </div>
+      )}
+
+      {photoCaptionTransition && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Moving to caption submission…</h2>
+        </div>
+      )}
+
+      {photoCaptioning && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Write your caption</h2>
+          <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
+          <div className="projector-answering-grid">
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading ready">Submitted</h3>
+              <ul className="projector-name-list">
+                {photoRound?.captionProgress?.done?.length ? (
+                  photoRound.captionProgress.done.map((p) => <li key={p.id}>{p.name}</li>)
+                ) : (
+                  <li className="muted">No captions yet</li>
+                )}
+              </ul>
+            </section>
+            <section className="projector-status-col">
+              <h3 className="projector-status-heading waiting">Waiting</h3>
+              <ul className="projector-name-list">
+                {photoRound?.captionProgress?.waiting?.length ? (
+                  photoRound.captionProgress.waiting.map((p) => <li key={p.id}>{p.name}</li>)
+                ) : (
+                  <li className="muted">Everyone submitted</li>
+                )}
+              </ul>
+            </section>
+          </div>
+        </div>
+      )}
+
+      {photoVoteLoading && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Loading voting round…</h2>
+        </div>
+      )}
+
+      {photoVoting && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">
+            Vote for your {photoRound?.votingStage === "first"
+              ? "favorite"
+              : photoRound?.votingStage === "second"
+              ? "2nd favorite"
+              : "3rd favorite"} pairing
+          </h2>
+          <p className="muted" style={{ marginBottom: "1rem" }}>
+            Votes cast: {photoRound?.voteProgress?.cast ?? 0}/{photoRound?.voteProgress?.needed ?? 0}
+          </p>
+          <div className="projector-photo-grid">
+            {(photoRound?.pairings || []).map((pairing) => (
+              <article key={pairing.number} className="projector-photo-card">
+                <p className="projector-photo-number">#{pairing.number}</p>
+                {pairing.photoDataUrl ? (
+                  <img src={pairing.photoDataUrl} alt={`Pairing ${pairing.number}`} />
+                ) : (
+                  <div className="projector-photo-placeholder">No photo uploaded</div>
+                )}
+                <p className="projector-photo-caption">{pairing.captionText || "No caption submitted"}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {photoDistributionLoading && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Loading vote distribution…</h2>
+        </div>
+      )}
+
+      {photoDistribution && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Photo pairing rankings</h2>
+          <div className="projector-photo-grid">
+            {(photoRound?.distribution?.pairings || []).map((pairing) => (
+              <article key={pairing.number} className="projector-photo-card">
+                <p className="projector-photo-number">
+                  #{pairing.number} - {Number(pairing.points || 0).toFixed(1)} pts
+                </p>
+                {pairing.photoDataUrl ? (
+                  <img src={pairing.photoDataUrl} alt={`Pairing ${pairing.number}`} />
+                ) : (
+                  <div className="projector-photo-placeholder">No photo uploaded</div>
+                )}
+                <p className="projector-photo-caption">{pairing.captionText || "No caption submitted"}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {photoEndTransition && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Preparing endgame…</h2>
         </div>
       )}
 
@@ -593,6 +749,8 @@ export default function App() {
   const [mogPayload, setMogPayload] = useState(null);
   const [chudPayload, setChudPayload] = useState(null);
   const [bothFoldPayload, setBothFoldPayload] = useState(null);
+  const [photoDataUrl, setPhotoDataUrl] = useState("");
+  const [photoCaptionDraft, setPhotoCaptionDraft] = useState("");
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [showCustomPromptInfo, setShowCustomPromptInfo] = useState(false);
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
@@ -888,6 +1046,30 @@ export default function App() {
     [socket]
   );
 
+  const submitPhoto = useCallback(() => {
+    setError("");
+    socket.emit("submit_photo", { photoDataUrl }, (res) => {
+      if (!res?.ok) setError(res?.error || "Photo submit failed.");
+    });
+  }, [socket, photoDataUrl]);
+
+  const submitPhotoCaption = useCallback(() => {
+    setError("");
+    socket.emit("submit_photo_caption", { caption: photoCaptionDraft }, (res) => {
+      if (!res?.ok) setError(res?.error || "Caption submit failed.");
+    });
+  }, [socket, photoCaptionDraft]);
+
+  const submitPhotoRankVote = useCallback(
+    (number) => {
+      setError("");
+      socket.emit("submit_photo_rank_vote", { number }, (res) => {
+        if (!res?.ok) setError(res?.error || "Rank vote failed.");
+      });
+    },
+    [socket]
+  );
+
   const myPrompts = session?.myPrompts ?? [];
   const isHost = session?.you && session?.hostPlayerId === session?.you;
 
@@ -910,17 +1092,30 @@ export default function App() {
   }, [session?.phase]);
 
   useEffect(() => {
-    if (session?.phase !== "answering" || !session?.answeringEndsAt) {
+    const timedPhaseEndsAt =
+      session?.phase === "answering"
+        ? session?.answeringEndsAt
+        : session?.phase === "photo_upload"
+        ? session?.photoRound?.uploadEndsAt
+        : session?.phase === "photo_captioning"
+        ? session?.photoRound?.captionEndsAt
+        : null;
+    if (!timedPhaseEndsAt) {
       setAnswerTimeLeftMs(0);
       return;
     }
     const tick = () => {
-      setAnswerTimeLeftMs(Math.max(0, session.answeringEndsAt - Date.now()));
+      setAnswerTimeLeftMs(Math.max(0, timedPhaseEndsAt - Date.now()));
     };
     tick();
     const id = setInterval(tick, 250);
     return () => clearInterval(id);
-  }, [session?.phase, session?.answeringEndsAt]);
+  }, [
+    session?.phase,
+    session?.answeringEndsAt,
+    session?.photoRound?.uploadEndsAt,
+    session?.photoRound?.captionEndsAt,
+  ]);
 
   useEffect(() => {
     if (session?.phase !== "answering") {
@@ -937,10 +1132,47 @@ export default function App() {
     if (session?.phase !== "lobby") setCustomPromptDraft("");
   }, [session?.phase]);
 
+  useEffect(() => {
+    if (session?.phase === "photo_upload") {
+      setPhotoDataUrl(session?.photoRound?.myPhotoDataUrl || "");
+      return;
+    }
+    setPhotoDataUrl("");
+  }, [session?.phase, session?.photoRound?.myPhotoDataUrl]);
+
+  useEffect(() => {
+    if (session?.phase === "photo_captioning") {
+      setPhotoCaptionDraft(session?.photoRound?.myCaptionText || "");
+      return;
+    }
+    setPhotoCaptionDraft("");
+  }, [session?.phase, session?.photoRound?.myCaptionText]);
+
   const lobby = session?.phase === "lobby";
   const answering = session?.phase === "answering";
   const showdown = session?.phase === "showdown";
+  const photoUpload = session?.phase === "photo_upload";
+  const photoCaptionTransition = session?.phase === "photo_caption_transition";
+  const photoCaptioning = session?.phase === "photo_captioning";
+  const photoVoteLoading = session?.phase === "photo_vote_loading";
+  const photoVoting = session?.phase === "photo_voting";
+  const photoDistributionLoading = session?.phase === "photo_distribution_loading";
+  const photoDistribution = session?.phase === "photo_distribution";
+  const photoEndTransition = session?.phase === "photo_end_transition";
   const ended = session?.phase === "ended";
+  const knownPlayerPhase =
+    lobby ||
+    answering ||
+    showdown ||
+    photoUpload ||
+    photoCaptionTransition ||
+    photoCaptioning ||
+    photoVoteLoading ||
+    photoVoting ||
+    photoDistributionLoading ||
+    photoDistribution ||
+    photoEndTransition ||
+    ended;
 
   const canVote = useMemo(() => {
     if (!showdown || !session?.showdown) return false;
@@ -973,6 +1205,23 @@ export default function App() {
     : "Get ready to vote...";
   const answerTimeLimitSec = session?.answerTimeLimitSec ?? 75;
   const answerTimeRemainingSec = Math.ceil(answerTimeLeftMs / 1000);
+  const photoRound = session?.photoRound ?? null;
+  const voteStageLabel =
+    photoRound?.votingStage === "first"
+      ? "favorite"
+      : photoRound?.votingStage === "second"
+      ? "2nd favorite"
+      : "3rd favorite";
+
+  const onPhotoFileChange = useCallback((e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPhotoDataUrl(String(reader.result || ""));
+    };
+    reader.readAsDataURL(file);
+  }, []);
 
   return (
     <div className={`layout${isProjector ? " layout--projector" : ""}`}>
@@ -1561,6 +1810,120 @@ export default function App() {
               All answers are in — moving to showdown…
             </p>
           )}
+        </div>
+      )}
+
+      {session && !isProjector && photoUpload && (
+        <div className="card">
+          <h2>Upload your photo</h2>
+          <p className="muted">Time left: {answerTimeRemainingSec}s</p>
+          <input type="file" accept="image/*" onChange={onPhotoFileChange} />
+          {photoDataUrl && (
+            <img
+              src={photoDataUrl}
+              alt="Your selected upload"
+              style={{ width: "100%", marginTop: "0.75rem", borderRadius: "12px" }}
+            />
+          )}
+          <button
+            type="button"
+            onClick={submitPhoto}
+            disabled={!photoDataUrl || !!photoRound?.myPhotoSubmitted}
+            style={{ marginTop: "0.9rem" }}
+          >
+            {photoRound?.myPhotoSubmitted ? "Uploaded" : "Submit photo"}
+          </button>
+        </div>
+      )}
+
+      {session && !isProjector && photoCaptionTransition && (
+        <div className="card">
+          <h2>Get ready to caption…</h2>
+        </div>
+      )}
+
+      {session && !isProjector && photoCaptioning && (
+        <div className="card">
+          <h2>Write your caption</h2>
+          <p className="muted">Time left: {answerTimeRemainingSec}s</p>
+          {photoRound?.myAssignedPhoto?.photoDataUrl ? (
+            <img
+              src={photoRound.myAssignedPhoto.photoDataUrl}
+              alt="Assigned photo"
+              style={{ width: "100%", marginTop: "0.5rem", borderRadius: "12px" }}
+            />
+          ) : (
+            <p className="muted">Assigned photo unavailable.</p>
+          )}
+          <input
+            type="text"
+            value={photoCaptionDraft}
+            onChange={(e) => setPhotoCaptionDraft(e.target.value)}
+            maxLength={160}
+            style={{ marginTop: "0.9rem" }}
+          />
+          <button
+            type="button"
+            onClick={submitPhotoCaption}
+            disabled={!!photoRound?.myCaptionSubmitted}
+            style={{ marginTop: "0.9rem" }}
+          >
+            {photoRound?.myCaptionSubmitted ? "Submitted" : "Submit caption"}
+          </button>
+        </div>
+      )}
+
+      {session && !isProjector && photoVoteLoading && (
+        <div className="card">
+          <h2>Loading voting…</h2>
+        </div>
+      )}
+
+      {session && !isProjector && photoVoting && (
+        <div className="card">
+          <h2>Vote for your {voteStageLabel}</h2>
+          <p className="muted">
+            Pick one number. You cannot reuse numbers across ranks.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem", marginTop: "0.9rem" }}>
+            {(photoRound?.voteChoices || []).map((num) => {
+              const alreadyUsed = [
+                photoRound?.myVotes?.third,
+                photoRound?.myVotes?.second,
+                photoRound?.myVotes?.first,
+              ].includes(num);
+              const alreadyVotedThisStage = !!photoRound?.myVotes?.[photoRound?.votingStage || "third"];
+              return (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => submitPhotoRankVote(num)}
+                  disabled={alreadyUsed || alreadyVotedThisStage}
+                >
+                  {num}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {session && !isProjector && photoDistributionLoading && (
+        <div className="card">
+          <h2>Calculating results…</h2>
+        </div>
+      )}
+
+      {session && !isProjector && photoEndTransition && (
+        <div className="card">
+          <h2>Moving to endgame…</h2>
+        </div>
+      )}
+
+      {session && !isProjector && !knownPlayerPhase && (
+        <div className="card">
+          <h2>Connected</h2>
+          <p className="muted">Waiting for the game state to sync…</p>
         </div>
       )}
 

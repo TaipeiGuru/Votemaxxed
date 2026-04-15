@@ -728,6 +728,66 @@ label {
   color: var(--accent);
 }
 
+.projector-photo-round {
+  max-width: min(95vw, 1280px);
+  margin: 0 auto;
+}
+
+.projector-photo-timer {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.1rem, 2vw, 1.4rem);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.projector-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.9rem;
+}
+
+.projector-photo-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.projector-photo-number {
+  margin: 0 0 0.5rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.projector-photo-card img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.projector-photo-placeholder {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.projector-photo-caption {
+  margin: 0.6rem 0 0;
+  font-size: 0.98rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 @keyframes projector-score-drop-in {
   from {
     transform: translateY(-180px);

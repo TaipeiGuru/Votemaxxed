@@ -28,6 +28,17 @@ const OVERLAY_BEFORE_REVIEW_MS = 3600;
 const NEXT_VOTE_SPLASH_MS = 3000;
 const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
 const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
+const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
+const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
+const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
+const PHOTO_END_TRANSITION_MS = 2500;
+const PHOTO_VOTE_POINTS = {
+  third: 50,
+  second: 100,
+  first: 150,
+};
+const PHOTO_VOTE_STAGE_ORDER = ["third", "second", "first"];
+const MAX_PHOTO_DATA_URL_LEN = 6_000_000;
 
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
 
@@ -115,6 +126,19 @@ function publicLastResult(r) {
   };
 }
 
+function isPhotoRoundPhase(phase) {
+  return (
+    phase === "photo_upload" ||
+    phase === "photo_caption_transition" ||
+    phase === "photo_captioning" ||
+    phase === "photo_vote_loading" ||
+    phase === "photo_distribution_loading" ||
+    phase === "photo_voting" ||
+    phase === "photo_distribution" ||
+    phase === "photo_end_transition"
+  );
+}
+
 function sessionSnapshot(sess, forPlayerId) {
   const base = {
     code: sess.code,
@@ -161,6 +185,84 @@ function sessionSnapshot(sess, forPlayerId) {
       answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
       answeringEndsAt: sess.answeringEndsAt ?? null,
       myAnswersSubmitted: submitted.has(forPlayerId),
+    };
+  }
+
+  if (isPhotoRoundPhase(sess.phase)) {
+    const isProjectorViewer = forPlayerId === PROJECTOR_SENTINEL_ID;
+    const pr = sess.photoRound || {};
+    const myVoteState = pr.rankedVotes?.[forPlayerId] || {};
+    const myAssignedUploaderId = pr.captionAssignments?.[forPlayerId] ?? null;
+    const uploaderPlayer = sess.players.find((p) => p.id === myAssignedUploaderId) || null;
+    const myCaptionText = pr.captions?.[forPlayerId] ?? "";
+    const myPhotoDataUrl = pr.uploads?.[forPlayerId] ?? "";
+    const pairingsPublic = (pr.pairings || []).map((p) => ({
+      number: p.number,
+      uploaderId: p.uploaderId,
+      captionerId: p.captionerId,
+      uploaderName: sess.players.find((pl) => pl.id === p.uploaderId)?.name ?? "?",
+      captionerName: sess.players.find((pl) => pl.id === p.captionerId)?.name ?? "?",
+      photoDataUrl: p.photoDataUrl || "",
+      captionText: p.captionText || "",
+      points: Number(p.points || 0),
+    }));
+    const distributionSorted = [...pairingsPublic].sort((a, b) => {
+      if (a.points !== b.points) return b.points - a.points;
+      return a.number - b.number;
+    });
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      photoRound: {
+        stage: sess.phase,
+        answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
+        uploadEndsAt: pr.uploadEndsAt ?? null,
+        captionEndsAt: pr.captionEndsAt ?? null,
+        uploadProgress: isProjectorViewer ? computePhotoUploadProgress(sess) : undefined,
+        captionProgress: isProjectorViewer ? computePhotoCaptionProgress(sess) : undefined,
+        myPhotoSubmitted: (pr.uploadSubmittedBy || []).includes(forPlayerId),
+        myPhotoDataUrl,
+        myAssignedPhoto:
+          sess.phase === "photo_captioning" ||
+          sess.phase === "photo_vote_loading" ||
+          sess.phase === "photo_distribution_loading" ||
+          sess.phase === "photo_voting" ||
+          sess.phase === "photo_distribution" ||
+          sess.phase === "photo_end_transition"
+            ? {
+                uploaderId: myAssignedUploaderId,
+                uploaderName: uploaderPlayer?.name ?? null,
+                photoDataUrl: pr.uploads?.[myAssignedUploaderId] || "",
+              }
+            : null,
+        myCaptionText,
+        myCaptionSubmitted: (pr.captionSubmittedBy || []).includes(forPlayerId),
+        votingStage: pr.votingStage || "third",
+        voteChoices: (pr.pairings || []).map((p) => p.number),
+        myVotes: {
+          third: myVoteState.third ?? null,
+          second: myVoteState.second ?? null,
+          first: myVoteState.first ?? null,
+        },
+        voteProgress: isProjectorViewer
+          ? {
+              cast: Object.keys(pr.rankedVotes || {}).filter((pid) => {
+                const ballot = pr.rankedVotes?.[pid] || {};
+                return !!ballot[pr.votingStage || "third"];
+              }).length,
+              needed: sess.players.length,
+            }
+          : undefined,
+        pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
+        distribution:
+          isProjectorViewer && sess.phase === "photo_distribution"
+            ? { pairings: distributionSorted }
+            : null,
+      },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
     };
   }
 
@@ -334,6 +436,30 @@ function computeAnswerProgress(sess) {
   return { done, waiting };
 }
 
+function computePhotoUploadProgress(sess) {
+  const doneSet = new Set(sess.photoRound?.uploadSubmittedBy || []);
+  const done = [];
+  const waiting = [];
+  for (const p of sess.players) {
+    const row = { id: p.id, name: p.name };
+    if (doneSet.has(p.id)) done.push(row);
+    else waiting.push(row);
+  }
+  return { done, waiting };
+}
+
+function computePhotoCaptionProgress(sess) {
+  const doneSet = new Set(sess.photoRound?.captionSubmittedBy || []);
+  const done = [];
+  const waiting = [];
+  for (const p of sess.players) {
+    const row = { id: p.id, name: p.name };
+    if (doneSet.has(p.id)) done.push(row);
+    else waiting.push(row);
+  }
+  return { done, waiting };
+}
+
 function sessionSnapshotForProjector(sess) {
   const snap = sessionSnapshot(sess, PROJECTOR_SENTINEL_ID);
   return {
@@ -388,6 +514,241 @@ function clearAnsweringTimer(sess) {
   }
 }
 
+function clearPhotoRoundTimers(sess) {
+  if (sess._photoUploadTimer) {
+    clearTimeout(sess._photoUploadTimer);
+    sess._photoUploadTimer = null;
+  }
+  if (sess._photoUploadTransitionTimer) {
+    clearTimeout(sess._photoUploadTransitionTimer);
+    sess._photoUploadTransitionTimer = null;
+  }
+  if (sess._photoCaptionTimer) {
+    clearTimeout(sess._photoCaptionTimer);
+    sess._photoCaptionTimer = null;
+  }
+  if (sess._photoVoteLoadingTimer) {
+    clearTimeout(sess._photoVoteLoadingTimer);
+    sess._photoVoteLoadingTimer = null;
+  }
+  if (sess._photoDistributionTimer) {
+    clearTimeout(sess._photoDistributionTimer);
+    sess._photoDistributionTimer = null;
+  }
+  if (sess._photoEndTransitionTimer) {
+    clearTimeout(sess._photoEndTransitionTimer);
+    sess._photoEndTransitionTimer = null;
+  }
+  if (sess._photoFinalEndTimer) {
+    clearTimeout(sess._photoFinalEndTimer);
+    sess._photoFinalEndTimer = null;
+  }
+}
+
+function setWinnerFromScores(sess) {
+  let best = -1;
+  let winners = [];
+  for (const p of sess.players) {
+    const s = Number(sess.scores?.[p.id] || 0);
+    if (s > best) {
+      best = s;
+      winners = [p];
+    } else if (s === best) {
+      winners.push(p);
+    }
+  }
+  sess.winner = {
+    names: winners.map((w) => w.name),
+    score: best,
+  };
+}
+
+function initPhotoRoundState(sess) {
+  const ids = sess.players.map((p) => p.id);
+  const captionAssignments = {};
+  const captionerByUploader = {};
+  for (let i = 0; i < ids.length; i++) {
+    const captionerId = ids[i];
+    const uploaderId = ids[(i + 1) % ids.length];
+    captionAssignments[captionerId] = uploaderId;
+    captionerByUploader[uploaderId] = captionerId;
+  }
+  const pairings = ids.map((uploaderId, idx) => ({
+    number: idx + 1,
+    uploaderId,
+    captionerId: captionerByUploader[uploaderId],
+    photoDataUrl: "",
+    captionText: "",
+    points: 0,
+  }));
+  sess.photoRound = {
+    uploads: {},
+    uploadSubmittedBy: [],
+    uploadEndsAt: null,
+    captionAssignments,
+    captions: {},
+    captionSubmittedBy: [],
+    captionEndsAt: null,
+    pairings,
+    rankedVotes: {},
+    votingStage: "third",
+  };
+}
+
+function allPhotosSubmitted(sess) {
+  return (sess.photoRound?.uploadSubmittedBy || []).length >= sess.players.length;
+}
+
+function allCaptionsSubmitted(sess) {
+  return (sess.photoRound?.captionSubmittedBy || []).length >= sess.players.length;
+}
+
+function allRankVotesSubmittedForStage(sess) {
+  const stage = sess.photoRound?.votingStage || "third";
+  for (const p of sess.players) {
+    const ballot = sess.photoRound?.rankedVotes?.[p.id] || {};
+    if (!ballot[stage]) return false;
+  }
+  return true;
+}
+
+function startPhotoCaptioning(sess) {
+  if (sess.phase !== "photo_caption_transition") return;
+  sess.phase = "photo_captioning";
+  const limitMs = (sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC) * 1000;
+  sess.photoRound.captionEndsAt = Date.now() + limitMs;
+  const code = sess.code;
+  sess._photoCaptionTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_captioning") return;
+    s._photoCaptionTimer = null;
+    finalizePhotoCaptioning(s);
+  }, limitMs);
+  broadcastSession(sess);
+}
+
+function startPhotoVoting(sess) {
+  if (sess.phase !== "photo_vote_loading") return;
+  sess.phase = "photo_voting";
+  sess.photoRound.votingStage = "third";
+  broadcastSession(sess);
+}
+
+function finalizePhotoVotingAndScore(sess) {
+  const pr = sess.photoRound;
+  if (!pr) return;
+  const pointsByNumber = new Map(pr.pairings.map((p) => [p.number, 0]));
+  for (const ballot of Object.values(pr.rankedVotes || {})) {
+    for (const stage of PHOTO_VOTE_STAGE_ORDER) {
+      const number = Number(ballot?.[stage] || 0);
+      if (!number || !pointsByNumber.has(number)) continue;
+      pointsByNumber.set(number, pointsByNumber.get(number) + PHOTO_VOTE_POINTS[stage]);
+    }
+  }
+  for (const pairing of pr.pairings) {
+    const totalPoints = Number(pointsByNumber.get(pairing.number) || 0);
+    pairing.points = totalPoints;
+    const split = totalPoints / 2;
+    sess.scores[pairing.uploaderId] = (sess.scores[pairing.uploaderId] || 0) + split;
+    sess.scores[pairing.captionerId] = (sess.scores[pairing.captionerId] || 0) + split;
+  }
+  const code = sess.code;
+  sess.phase = "photo_distribution_loading";
+  broadcastSession(sess);
+  sess._photoDistributionTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_distribution_loading") return;
+    s._photoDistributionTimer = null;
+    s.phase = "photo_distribution";
+    broadcastSession(s);
+    s._photoEndTransitionTimer = setTimeout(() => {
+      const s2 = sessions.get(code);
+      if (!s2 || s2.phase !== "photo_distribution") return;
+      s2._photoEndTransitionTimer = null;
+      s2.phase = "photo_end_transition";
+      broadcastSession(s2);
+      s2._photoFinalEndTimer = setTimeout(() => {
+        const s3 = sessions.get(code);
+        if (!s3 || s3.phase !== "photo_end_transition") return;
+        s3._photoFinalEndTimer = null;
+        s3.phase = "ended";
+        setWinnerFromScores(s3);
+        broadcastSession(s3);
+      }, PHOTO_END_TRANSITION_MS);
+    }, PHOTO_END_TRANSITION_MS);
+  }, PHOTO_DISTRIBUTION_REVIEW_MS);
+}
+
+function movePhotoVotingToNextStageOrFinish(sess) {
+  const stage = sess.photoRound?.votingStage || "third";
+  const idx = PHOTO_VOTE_STAGE_ORDER.indexOf(stage);
+  if (idx === -1 || idx === PHOTO_VOTE_STAGE_ORDER.length - 1) {
+    finalizePhotoVotingAndScore(sess);
+    return;
+  }
+  sess.photoRound.votingStage = PHOTO_VOTE_STAGE_ORDER[idx + 1];
+  broadcastSession(sess);
+}
+
+function finalizePhotoCaptioning(sess) {
+  if (sess.phase !== "photo_captioning") return;
+  const pr = sess.photoRound;
+  if (!pr) return;
+  for (const p of sess.players) {
+    if (!pr.captionSubmittedBy.includes(p.id)) pr.captionSubmittedBy.push(p.id);
+    if (typeof pr.captions[p.id] !== "string") pr.captions[p.id] = "";
+  }
+  for (const pairing of pr.pairings) {
+    pairing.photoDataUrl = String(pr.uploads[pairing.uploaderId] || "");
+    pairing.captionText = String(pr.captions[pairing.captionerId] || "");
+  }
+  pr.captionEndsAt = null;
+  sess.phase = "photo_vote_loading";
+  broadcastSession(sess);
+  const code = sess.code;
+  sess._photoVoteLoadingTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_vote_loading") return;
+    s._photoVoteLoadingTimer = null;
+    startPhotoVoting(s);
+  }, PHOTO_CAPTION_TO_VOTE_LOADING_MS);
+}
+
+function finalizePhotoUpload(sess) {
+  if (sess.phase !== "photo_upload") return;
+  const pr = sess.photoRound;
+  if (!pr) return;
+  for (const p of sess.players) {
+    if (!pr.uploadSubmittedBy.includes(p.id)) pr.uploadSubmittedBy.push(p.id);
+    if (typeof pr.uploads[p.id] !== "string") pr.uploads[p.id] = "";
+  }
+  pr.uploadEndsAt = null;
+  sess.phase = "photo_caption_transition";
+  broadcastSession(sess);
+  const code = sess.code;
+  sess._photoUploadTransitionTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_caption_transition") return;
+    s._photoUploadTransitionTimer = null;
+    startPhotoCaptioning(s);
+  }, PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS);
+}
+
+function startPhotoRound(sess) {
+  clearPhotoRoundTimers(sess);
+  initPhotoRoundState(sess);
+  sess.phase = "photo_upload";
+  const limitMs = (sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC) * 1000;
+  sess.photoRound.uploadEndsAt = Date.now() + limitMs;
+  const code = sess.code;
+  sess._photoUploadTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_upload") return;
+    s._photoUploadTimer = null;
+    finalizePhotoUpload(s);
+  }, limitMs);
+}
+
 function beginShowdownFromAnswering(sess) {
   clearAnsweringTimer(sess);
   clearShowdownTimers(sess);
@@ -420,22 +781,7 @@ function beginShowdownFromAnswering(sess) {
 function bumpShowdownQueueAndMaybeEnd(sess) {
   sess.currentQueueIndex++;
   if (sess.currentQueueIndex >= sess.showdownQueue.length) {
-    sess.phase = "ended";
-    let best = -1;
-    let winners = [];
-    for (const p of sess.players) {
-      const s = sess.scores[p.id] || 0;
-      if (s > best) {
-        best = s;
-        winners = [p];
-      } else if (s === best) {
-        winners.push(p);
-      }
-    }
-    sess.winner = {
-      names: winners.map((w) => w.name),
-      score: best,
-    };
+    startPhotoRound(sess);
   }
 }
 
@@ -968,6 +1314,8 @@ function startServer() {
       sess.showdownReviewActive = false;
       sess.showdownSplashActive = false;
       clearShowdownTimers(sess);
+      clearPhotoRoundTimers(sess);
+      sess.photoRound = null;
 
       if (typeof cb === "function") cb({ ok: true });
       broadcastSession(sess);
@@ -1169,6 +1517,116 @@ function startServer() {
       broadcastSession(sess);
     });
 
+    socket.on("submit_photo", ({ photoDataUrl } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "photo_upload") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in photo upload phase." });
+        return;
+      }
+      if (!sess.photoRound) {
+        if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
+        return;
+      }
+      const encoded = String(photoDataUrl || "").trim();
+      if (!encoded.startsWith("data:image/")) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid photo format." });
+        return;
+      }
+      if (encoded.length > MAX_PHOTO_DATA_URL_LEN) {
+        if (typeof cb === "function") cb({ ok: false, error: "Photo is too large." });
+        return;
+      }
+      sess.photoRound.uploads[player.id] = encoded;
+      if (!sess.photoRound.uploadSubmittedBy.includes(player.id)) {
+        sess.photoRound.uploadSubmittedBy.push(player.id);
+      }
+      if (typeof cb === "function") cb({ ok: true });
+      if (allPhotosSubmitted(sess)) {
+        finalizePhotoUpload(sess);
+      } else {
+        broadcastSession(sess);
+      }
+    });
+
+    socket.on("submit_photo_caption", ({ caption } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "photo_captioning") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in caption phase." });
+        return;
+      }
+      if (!sess.photoRound) {
+        if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
+        return;
+      }
+      const text = String(caption || "").slice(0, 160);
+      sess.photoRound.captions[player.id] = text;
+      if (!sess.photoRound.captionSubmittedBy.includes(player.id)) {
+        sess.photoRound.captionSubmittedBy.push(player.id);
+      }
+      if (typeof cb === "function") cb({ ok: true });
+      if (allCaptionsSubmitted(sess)) {
+        finalizePhotoCaptioning(sess);
+      } else {
+        broadcastSession(sess);
+      }
+    });
+
+    socket.on("submit_photo_rank_vote", ({ number } = {}, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (sess.phase !== "photo_voting") {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in photo voting phase." });
+        return;
+      }
+      const pr = sess.photoRound;
+      if (!pr) {
+        if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
+        return;
+      }
+      const choice = Number(number);
+      const validChoices = new Set((pr.pairings || []).map((p) => p.number));
+      if (!validChoices.has(choice)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid choice." });
+        return;
+      }
+      const stage = pr.votingStage || "third";
+      const ballot = pr.rankedVotes[player.id] || {};
+      if (ballot[stage]) {
+        if (typeof cb === "function") cb({ ok: false, error: "You already voted this stage." });
+        return;
+      }
+      if (Object.values(ballot).includes(choice)) {
+        if (typeof cb === "function") cb({ ok: false, error: "You cannot reuse a ranking choice." });
+        return;
+      }
+      ballot[stage] = choice;
+      pr.rankedVotes[player.id] = ballot;
+      if (typeof cb === "function") cb({ ok: true });
+      if (allRankVotesSubmittedForStage(sess)) {
+        if (stage === "first") {
+          finalizePhotoVotingAndScore(sess);
+        } else {
+          movePhotoVotingToNextStageOrFinish(sess);
+        }
+      } else {
+        broadcastSession(sess);
+      }
+    });
+
     socket.on("vote", ({ choice } = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
@@ -1254,6 +1712,7 @@ function startServer() {
       } else {
         clearAnsweringTimer(sess);
         clearShowdownTimers(sess);
+        clearPhotoRoundTimers(sess);
         sessions.delete(sess.code);
         io.to(sess.code).emit("session_state", {
           phase: "gone",
