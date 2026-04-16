@@ -6,6 +6,212 @@ const SERVER =
 
 const MOGGED_SOUND_URL = `${import.meta.env.BASE_URL}audio/mogged.mp3`;
 
+/** Preview size (px); must match `.photo-crop-viewport` width/height in CSS. */
+const PHOTO_CROP_PREVIEW_PX = 320;
+/** Output square size (JPEG) — matches 1:1 grid display. */
+const PHOTO_CROP_EXPORT_PX = 800;
+
+/** Pan clamp for contain-fit baseline: full image visible at zoom 1; pan only when zoomed past the edges. */
+function clampPhotoPan(pan, zoom, iw, ih, V) {
+  if (!iw || !ih || !V) return { x: 0, y: 0 };
+  const fitScale = Math.min(V / iw, V / ih);
+  const w = iw * fitScale * zoom;
+  const h = ih * fitScale * zoom;
+  const maxPX = Math.max(0, (w - V) / 2);
+  const maxPY = Math.max(0, (h - V) / 2);
+  return {
+    x: Math.max(-maxPX, Math.min(maxPX, pan.x)),
+    y: Math.max(-maxPY, Math.min(maxPY, pan.y)),
+  };
+}
+
+/** Match on-screen viewport: contain-scale × zoom, centered with pan; letterbox areas use bg. */
+function exportPhotoSquareCrop(img, zoom, pan, previewPx, outputPx) {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (!iw || !ih) return "";
+  const V = previewPx;
+  const S = outputPx;
+  const fitScale = Math.min(V / iw, V / ih);
+  const s = fitScale * zoom;
+  const scaleDest = S / V;
+  const destCx = S / 2 + pan.x * scaleDest;
+  const destCy = S / 2 + pan.y * scaleDest;
+  const drawW = iw * s * scaleDest;
+  const drawH = ih * s * scaleDest;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0f1114";
+  ctx.fillRect(0, 0, S, S);
+  ctx.drawImage(img, 0, 0, iw, ih, destCx - drawW / 2, destCy - drawH / 2, drawW, drawH);
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
+function PhotoSquareCropModal({ imageSrc, onCancel, onConfirm, submitting = false }) {
+  const imgRef = useRef(null);
+  const viewportRef = useRef(null);
+  const [viewportPx, setViewportPx] = useState(PHOTO_CROP_PREVIEW_PX);
+  const [natural, setNatural] = useState({ w: 0, h: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null);
+
+  const maxZoom = useMemo(() => {
+    if (!natural.w || !natural.h) return 3;
+    const aspect = Math.max(natural.w / natural.h, natural.h / natural.w);
+    return Math.min(15, Math.max(3, aspect * 1.02));
+  }, [natural]);
+
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setNatural({ w: 0, h: 0 });
+  }, [imageSrc]);
+
+  useEffect(() => {
+    setZoom((z) => Math.min(z, maxZoom));
+  }, [maxZoom]);
+
+  const { baseW, baseH } = useMemo(() => {
+    if (!natural.w || !natural.h || !viewportPx) return { baseW: 0, baseH: 0 };
+    const fs = Math.min(viewportPx / natural.w, viewportPx / natural.h);
+    return { baseW: natural.w * fs, baseH: natural.h * fs };
+  }, [natural, viewportPx]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w > 0) setViewportPx(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [imageSrc]);
+
+  const applyClamp = useCallback((p, z) => {
+    const img = imgRef.current;
+    if (!img?.naturalWidth) return p;
+    const V = viewportPx > 0 ? viewportPx : PHOTO_CROP_PREVIEW_PX;
+    return clampPhotoPan(p, z, img.naturalWidth, img.naturalHeight, V);
+  }, [viewportPx]);
+
+  useEffect(() => {
+    setPan((p) => applyClamp(p, zoom));
+  }, [zoom, applyClamp]);
+
+  const onImgLoad = useCallback(() => {
+    const img = imgRef.current;
+    if (img?.naturalWidth) {
+      setNatural({ w: img.naturalWidth, h: img.naturalHeight });
+    }
+    setPan((p) => applyClamp(p, zoom));
+  }, [applyClamp, zoom]);
+
+  const onPointerDown = (e) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { ox: e.clientX - pan.x, oy: e.clientY - pan.y };
+  };
+  const onPointerMove = (e) => {
+    if (!dragRef.current) return;
+    const next = {
+      x: e.clientX - dragRef.current.ox,
+      y: e.clientY - dragRef.current.oy,
+    };
+    setPan(applyClamp(next, zoom));
+  };
+  const endDrag = () => {
+    dragRef.current = null;
+  };
+
+  const handleConfirm = () => {
+    if (submitting) return;
+    const img = imgRef.current;
+    if (!img?.naturalWidth || baseW <= 0) return;
+    const p = applyClamp(pan, zoom);
+    const V = viewportPx > 0 ? viewportPx : PHOTO_CROP_PREVIEW_PX;
+    onConfirm(exportPhotoSquareCrop(img, zoom, p, V, PHOTO_CROP_EXPORT_PX));
+  };
+
+  return (
+    <div
+      className="photo-crop-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="photo-crop-title"
+      onClick={submitting ? undefined : onCancel}
+    >
+      <div className="photo-crop-modal-backdrop" aria-hidden />
+      <div className="photo-crop-modal-card" onClick={(e) => e.stopPropagation()}>
+        <h3 id="photo-crop-title" className="photo-crop-modal-title">
+          Zoom and crop
+        </h3>
+        <p className="muted photo-crop-modal-hint">
+          Drag your finger to reposition and use the slider to zoom.
+          Tap outside this card to pick a different image.
+        </p>
+        <div
+          ref={viewportRef}
+          className="photo-crop-viewport"
+          onPointerDown={baseW > 0 ? onPointerDown : undefined}
+          onPointerMove={baseW > 0 ? onPointerMove : undefined}
+          onPointerUp={baseW > 0 ? endDrag : undefined}
+          onPointerCancel={baseW > 0 ? endDrag : undefined}
+        >
+          <div
+            className={`photo-crop-pan-layer${baseW > 0 ? "" : " photo-crop-pan-layer--loading"}`}
+            style={
+              baseW > 0
+                ? {
+                    width: `${baseW}px`,
+                    height: `${baseH}px`,
+                    transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px)) scale(${zoom})`,
+                  }
+                : undefined
+            }
+          >
+            <img
+              ref={imgRef}
+              src={imageSrc}
+              alt=""
+              draggable={false}
+              className="photo-crop-img"
+              onLoad={onImgLoad}
+            />
+          </div>
+        </div>
+        <label className="photo-crop-zoom-label">
+          <span>Zoom</span>
+          <input
+            type="range"
+            min={1}
+            max={maxZoom}
+            step={0.02}
+            value={Math.min(zoom, maxZoom)}
+            onChange={(e) => setZoom(Number(e.target.value))}
+          />
+        </label>
+        <div className="photo-crop-actions photo-crop-actions--single">
+          <button
+            type="button"
+            onClick={handleConfirm}
+            className="photo-crop-primary"
+            disabled={baseW <= 0 || submitting}
+          >
+            {submitting ? "Submitting…" : "Submit Photo"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function useSocket() {
   const ref = useRef(null);
   if (!ref.current) {
@@ -276,14 +482,15 @@ function ProjectorScoreDropBoard({ players, scores, phaseKey }) {
     }));
   }, [players, scores]);
 
-  const [revealedGroup, setRevealedGroup] = useState(-1);
+  const [revealedGroup, setRevealedGroup] = useState(0);
   const [droppingIds, setDroppingIds] = useState([]);
   const dropClearTimerRef = useRef(null);
 
+  /** Reset when the board context changes; start at 0 so the first score group is visible immediately (in sync with player “scoremaxxer” screen). */
   useEffect(() => {
-    setRevealedGroup(-1);
+    setRevealedGroup(0);
     setDroppingIds([]);
-  }, [phaseKey, rows.length]);
+  }, [phaseKey]);
 
   useEffect(() => {
     if (!rows.length) return undefined;
@@ -358,48 +565,46 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
+  const round1Scores = session?.phase === "round1_scores";
+  const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
   const sd = session?.showdown;
   const progress = session?.answerProgress ?? { done: [], waiting: [] };
   const photoRound = session?.photoRound ?? null;
+  const photoVotePairings = photoRound?.pairings || [];
+  const photoVoteGridCols = Math.max(1, Math.ceil(Math.sqrt(photoVotePairings.length || 1)));
+  const photoVoteGridRows = Math.max(
+    1,
+    Math.ceil((photoVotePairings.length || 1) / photoVoteGridCols)
+  );
+  const photoDistributionPairings = photoRound?.distribution?.pairings || [];
+  const photoDistributionGridCols = Math.max(
+    1,
+    Math.ceil(Math.sqrt(photoDistributionPairings.length || 1))
+  );
+  const photoDistributionGridRows = Math.max(
+    1,
+    Math.ceil((photoDistributionPairings.length || 1) / photoDistributionGridCols)
+  );
 
   const breakdownVisible =
     !!session?.lastResult?.voteBreakdown && showVoteDistribution;
 
+  const projectorHeaderMatchPlayer =
+    photoDistributionLoading || photoEndTransition;
+
   return (
     <div className="projector-root">
-      <header className="projector-top">
+      <header
+        className={`projector-top${projectorHeaderMatchPlayer ? " projector-top--match-player" : ""}`}
+      >
         <div className="projector-brand">
           <p className="projector-kicker">Votemaxxed</p>
-          {(lobby ||
-            answering ||
-            (showdown && sd?.splashActive) ||
-            photoUpload ||
-            photoCaptionTransition ||
-            photoCaptioning ||
-            photoVoteLoading ||
-            photoVoting ||
-            photoDistributionLoading ||
-            photoDistribution ||
-            photoEndTransition ||
-            ended) && (
-            <p className="projector-phase-label muted">
-              {lobby && "Waiting for the host"}
-              {answering && "Players are writing answers"}
-              {showdown && sd?.splashActive && "Next round"}
-              {photoUpload && "Photo upload"}
-              {photoCaptionTransition && "Get ready to caption"}
-              {photoCaptioning && "Caption submission"}
-              {photoVoteLoading && "Preparing voting grid"}
-              {photoVoting && "Rank your favorites"}
-              {photoDistributionLoading && "Tallying votes"}
-              {photoDistribution && "Vote distribution"}
-              {photoEndTransition && "Final transition"}
-              {ended && "Game over"}
-            </p>
-          )}
+          <p className="muted projector-match-player-tagline">
+            Are you a true votemaxxer? Use your creativity to avoid getting answermogged.
+          </p>
         </div>
-        {code ? (
+        {code && !projectorHeaderMatchPlayer ? (
           <p className="projector-code" aria-label="Session code">
             {code}
           </p>
@@ -500,7 +705,6 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
 
       {photoUpload && (
         <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Upload a photo</h2>
           <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
           <div className="projector-answering-grid">
             <section className="projector-status-col">
@@ -528,14 +732,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       )}
 
       {photoCaptionTransition && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Moving to caption submission…</h2>
+        <div className="card">
+          <h2>Get ready to caption…</h2>
         </div>
       )}
 
       {photoCaptioning && (
         <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Write your caption</h2>
           <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
           <div className="projector-answering-grid">
             <section className="projector-status-col">
@@ -563,26 +766,37 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       )}
 
       {photoVoteLoading && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Loading voting round…</h2>
+        <div className="card">
+          <h2>Let's see the point breakdown...</h2>
         </div>
       )}
 
       {photoVoting && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">
-            Vote for your {photoRound?.votingStage === "first"
-              ? "favorite"
-              : photoRound?.votingStage === "second"
-              ? "2nd favorite"
-              : "3rd favorite"} pairing
-          </h2>
-          <p className="muted" style={{ marginBottom: "1rem" }}>
-            Votes cast: {photoRound?.voteProgress?.cast ?? 0}/{photoRound?.voteProgress?.needed ?? 0}
-          </p>
-          <div className="projector-photo-grid">
-            {(photoRound?.pairings || []).map((pairing) => (
-              <article key={pairing.number} className="projector-photo-card">
+        <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
+          <p className="muted projector-ballot-complete-heading">Finished voting:</p>
+          <div
+            className="projector-ballot-name-chips"
+            aria-label="Players who submitted a full ballot"
+          >
+            {(photoRound?.voteProgress?.ballotComplete?.length ?? 0) === 0 ? (
+              <span className="muted">None yet</span>
+            ) : (
+              photoRound.voteProgress.ballotComplete.map((row) => (
+                <span key={row.id} className="projector-ballot-name-chip">
+                  {row.name}
+                </span>
+              ))
+            )}
+          </div>
+          <div
+            className="projector-photo-grid projector-photo-grid--vote-fit"
+            style={{
+              "--vote-grid-cols": photoVoteGridCols,
+              "--vote-grid-rows": photoVoteGridRows,
+            }}
+          >
+            {photoVotePairings.map((pairing) => (
+              <article key={pairing.number} className="projector-photo-card projector-photo-card--vote-fit">
                 <p className="projector-photo-number">#{pairing.number}</p>
                 {pairing.photoDataUrl ? (
                   <img src={pairing.photoDataUrl} alt={`Pairing ${pairing.number}`} />
@@ -597,17 +811,23 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       )}
 
       {photoDistributionLoading && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Loading vote distribution…</h2>
+        <div className="projector-card projector-card--surface projector-photo-round">
+          <h2>Let's see who mogged...</h2>
         </div>
       )}
 
       {photoDistribution && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Photo pairing rankings</h2>
-          <div className="projector-photo-grid">
-            {(photoRound?.distribution?.pairings || []).map((pairing) => (
-              <article key={pairing.number} className="projector-photo-card">
+        <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
+          <h2 className="projector-card-title projector-card-title--vote-fit">Photo pairing rankings</h2>
+          <div
+            className="projector-photo-grid projector-photo-grid--vote-fit"
+            style={{
+              "--vote-grid-cols": photoDistributionGridCols,
+              "--vote-grid-rows": photoDistributionGridRows,
+            }}
+          >
+            {photoDistributionPairings.map((pairing) => (
+              <article key={pairing.number} className="projector-photo-card projector-photo-card--vote-fit">
                 <p className="projector-photo-number">
                   #{pairing.number} - {Number(pairing.points || 0).toFixed(1)} pts
                 </p>
@@ -624,18 +844,27 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       )}
 
       {photoEndTransition && (
-        <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Preparing endgame…</h2>
+        <div className="projector-card projector-card--surface projector-photo-round">
+          <h2>Who's the ultimate votemaxxer?</h2>
         </div>
       )}
 
-      {ended && (
+      {(round1Scores || ended) && (
         <div className="projector-card">
           <ProjectorScoreDropBoard
             players={session.players}
             scores={session.scores}
             phaseKey={`${session.code}-${session.phase}`}
           />
+        </div>
+      )}
+
+      {round2Splash && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Round 2</h2>
+          <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
+            Photo uploads open in a moment…
+          </p>
         </div>
       )}
     </div>
@@ -750,6 +979,8 @@ export default function App() {
   const [chudPayload, setChudPayload] = useState(null);
   const [bothFoldPayload, setBothFoldPayload] = useState(null);
   const [photoDataUrl, setPhotoDataUrl] = useState("");
+  const [photoCropObjectUrl, setPhotoCropObjectUrl] = useState(null);
+  const [photoSubmitPending, setPhotoSubmitPending] = useState(false);
   const [photoCaptionDraft, setPhotoCaptionDraft] = useState("");
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [showCustomPromptInfo, setShowCustomPromptInfo] = useState(false);
@@ -834,8 +1065,12 @@ export default function App() {
       pendingVoteRevealRef.current = null;
       return;
     }
-    if (session?.phase === "ended") {
-      setVoteRevealVisible(true);
+    if (
+      session?.phase === "ended" ||
+      session?.phase === "round1_scores" ||
+      session?.phase === "round2_splash"
+    ) {
+      setVoteRevealVisible(session?.phase === "ended");
       pendingVoteRevealRef.current = null;
       return;
     }
@@ -1046,13 +1281,6 @@ export default function App() {
     [socket]
   );
 
-  const submitPhoto = useCallback(() => {
-    setError("");
-    socket.emit("submit_photo", { photoDataUrl }, (res) => {
-      if (!res?.ok) setError(res?.error || "Photo submit failed.");
-    });
-  }, [socket, photoDataUrl]);
-
   const submitPhotoCaption = useCallback(() => {
     setError("");
     socket.emit("submit_photo_caption", { caption: photoCaptionDraft }, (res) => {
@@ -1061,9 +1289,9 @@ export default function App() {
   }, [socket, photoCaptionDraft]);
 
   const submitPhotoRankVote = useCallback(
-    (number) => {
+    (rank, number) => {
       setError("");
-      socket.emit("submit_photo_rank_vote", { number }, (res) => {
+      socket.emit("submit_photo_rank_vote", { rank, number }, (res) => {
         if (!res?.ok) setError(res?.error || "Rank vote failed.");
       });
     },
@@ -1141,6 +1369,22 @@ export default function App() {
   }, [session?.phase, session?.photoRound?.myPhotoDataUrl]);
 
   useEffect(() => {
+    if (session?.phase === "photo_upload") return;
+    setPhotoCropObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, [session?.phase]);
+
+  const closePhotoCropper = useCallback(() => {
+    setPhotoSubmitPending(false);
+    setPhotoCropObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, []);
+
+  useEffect(() => {
     if (session?.phase === "photo_captioning") {
       setPhotoCaptionDraft(session?.photoRound?.myCaptionText || "");
       return;
@@ -1159,6 +1403,8 @@ export default function App() {
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
+  const round1Scores = session?.phase === "round1_scores";
+  const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
   const knownPlayerPhase =
     lobby ||
@@ -1170,8 +1416,9 @@ export default function App() {
     photoVoteLoading ||
     photoVoting ||
     photoDistributionLoading ||
-    photoDistribution ||
     photoEndTransition ||
+    round1Scores ||
+    round2Splash ||
     ended;
 
   const canVote = useMemo(() => {
@@ -1191,9 +1438,12 @@ export default function App() {
   const isProjector = session?.role === "projector";
   const playerCount = session?.players?.length ?? 0;
   const canStartGame = playerCount >= 3 && playerCount <= 10;
+  const projectorVoteFit = isProjector && (photoVoting || photoDistribution);
 
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&
+    session?.phase !== "round1_scores" &&
+    session?.phase !== "round2_splash" &&
     (session?.phase === "ended" || voteRevealVisible);
   const isFinalShowdownSplash =
     session?.phase === "showdown" &&
@@ -1201,30 +1451,27 @@ export default function App() {
     Number(session?.showdown?.queueIndex) ===
       Number(session?.showdown?.totalShowdowns) - 1;
   const nextVoteSplashText = isFinalShowdownSplash
-    ? "let's see the answermaxxer leaderboard..."
+    ? "Let's see the answermaxxer leaderboard..."
     : "Get ready to vote...";
   const answerTimeLimitSec = session?.answerTimeLimitSec ?? 75;
   const answerTimeRemainingSec = Math.ceil(answerTimeLeftMs / 1000);
   const photoRound = session?.photoRound ?? null;
-  const voteStageLabel =
-    photoRound?.votingStage === "first"
-      ? "favorite"
-      : photoRound?.votingStage === "second"
-      ? "2nd favorite"
-      : "3rd favorite";
-
   const onPhotoFileChange = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPhotoDataUrl(String(reader.result || ""));
-    };
-    reader.readAsDataURL(file);
+    setPhotoCropObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
+    e.target.value = "";
   }, []);
 
   return (
-    <div className={`layout${isProjector ? " layout--projector" : ""}`}>
+    <div
+      className={`layout${isProjector ? " layout--projector" : ""}${
+        projectorVoteFit ? " layout--projector-vote-fit" : ""
+      }`}
+    >
       {!isProjector && (
         <header style={{ marginBottom: "1.75rem" }}>
           <h1 style={{ fontSize: "2.35rem", letterSpacing: "-0.02em" }}>
@@ -1259,6 +1506,31 @@ export default function App() {
         active={!!session?.showdown?.splashActive}
         text={nextVoteSplashText}
       />
+      <NextVoteSplash
+        active={session?.phase === "round2_splash"}
+        text="Round 2"
+      />
+
+      {photoCropObjectUrl && (
+        <PhotoSquareCropModal
+          imageSrc={photoCropObjectUrl}
+          onCancel={closePhotoCropper}
+          submitting={photoSubmitPending}
+          onConfirm={(dataUrl) => {
+            setError("");
+            setPhotoDataUrl(dataUrl);
+            setPhotoSubmitPending(true);
+            socket.emit("submit_photo", { photoDataUrl: dataUrl }, (res) => {
+              setPhotoSubmitPending(false);
+              if (!res?.ok) {
+                setError(res?.error || "Photo submit failed.");
+                return;
+              }
+              closePhotoCropper();
+            });
+          }}
+        />
+      )}
 
       {error && (
         <div
@@ -1813,26 +2085,41 @@ export default function App() {
         </div>
       )}
 
+      {session && !isProjector && round2Splash && (
+        <div className="card">
+          <h2>Round 2</h2>
+          <p className="muted" style={{ marginBottom: 0 }}>
+            Photo uploads are about to open…
+          </p>
+        </div>
+      )}
+
       {session && !isProjector && photoUpload && (
         <div className="card">
-          <h2>Upload your photo</h2>
+          <h2>Choose a funny photo</h2>
           <p className="muted">Time left: {answerTimeRemainingSec}s</p>
-          <input type="file" accept="image/*" onChange={onPhotoFileChange} />
+          <input
+            id="photo-upload"
+            className="photo-upload-sr-only"
+            type="file"
+            accept="image/*"
+            onChange={onPhotoFileChange}
+          />
+          <label htmlFor="photo-upload" className="photo-upload-file-label">
+            Pick image
+          </label>
           {photoDataUrl && (
             <img
               src={photoDataUrl}
               alt="Your selected upload"
-              style={{ width: "100%", marginTop: "0.75rem", borderRadius: "12px" }}
+              className="photo-upload-preview"
             />
           )}
-          <button
-            type="button"
-            onClick={submitPhoto}
-            disabled={!photoDataUrl || !!photoRound?.myPhotoSubmitted}
-            style={{ marginTop: "0.9rem" }}
-          >
-            {photoRound?.myPhotoSubmitted ? "Uploaded" : "Submit photo"}
-          </button>
+          {photoRound?.myPhotoSubmitted && (
+            <p className="muted" style={{ marginTop: "0.9rem", marginBottom: 0 }}>
+              Uploaded
+            </p>
+          )}
         </div>
       )}
 
@@ -1844,7 +2131,7 @@ export default function App() {
 
       {session && !isProjector && photoCaptioning && (
         <div className="card">
-          <h2>Write your caption</h2>
+          <h2>Give a funny caption</h2>
           <p className="muted">Time left: {answerTimeRemainingSec}s</p>
           {photoRound?.myAssignedPhoto?.photoDataUrl ? (
             <img
@@ -1875,52 +2162,63 @@ export default function App() {
 
       {session && !isProjector && photoVoteLoading && (
         <div className="card">
-          <h2>Loading voting…</h2>
+          <h2>Let's see the point breakdown...</h2>
         </div>
       )}
 
       {session && !isProjector && photoVoting && (
-        <div className="card">
-          <h2>Vote for your {voteStageLabel}</h2>
-          <p className="muted">
-            Pick one number. You cannot reuse numbers across ranks.
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem", marginTop: "0.9rem" }}>
-            {(photoRound?.voteChoices || []).map((num) => {
-              const alreadyUsed = [
-                photoRound?.myVotes?.third,
-                photoRound?.myVotes?.second,
-                photoRound?.myVotes?.first,
-              ].includes(num);
-              const alreadyVotedThisStage = !!photoRound?.myVotes?.[photoRound?.votingStage || "third"];
-              return (
-                <button
-                  key={num}
-                  type="button"
-                  onClick={() => submitPhotoRankVote(num)}
-                  disabled={alreadyUsed || alreadyVotedThisStage}
-                >
-                  {num}
-                </button>
-              );
-            })}
-          </div>
+        <div className="card photo-rank-vote-card">
+          <h2>Rank the pairings</h2>
+          {[
+            { rank: "third", label: "3rd favorite" },
+            { rank: "second", label: "2nd favorite" },
+            { rank: "first", label: "1st favorite" },
+          ].map(({ rank, label }) => {
+            const votes = photoRound?.myVotes || {};
+            return (
+              <div key={rank} className="photo-rank-vote-row">
+                <h3 className="photo-rank-vote-heading">{label}</h3>
+                <div className="photo-rank-vote-buttons">
+                  {(photoRound?.voteChoices || []).map((num) => {
+                    const takenElsewhere = ["third", "second", "first"].some(
+                      (k) => k !== rank && votes[k] === num
+                    );
+                    const isSelected = votes[rank] === num;
+                    return (
+                      <button
+                        key={`${rank}-${num}`}
+                        type="button"
+                        className={isSelected ? "photo-rank-vote-btn is-selected" : "photo-rank-vote-btn"}
+                        onClick={() => submitPhotoRankVote(rank, num)}
+                        disabled={takenElsewhere && !isSelected}
+                      >
+                        {num}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {session && !isProjector && photoDistributionLoading && (
         <div className="card">
-          <h2>Calculating results…</h2>
+          <h2>Let's see who mogged...</h2>
         </div>
       )}
 
       {session && !isProjector && photoEndTransition && (
         <div className="card">
-          <h2>Moving to endgame…</h2>
+          <h2>Who's the ultimate votemaxxer?</h2>
         </div>
       )}
 
-      {session && !isProjector && !knownPlayerPhase && (
+      {session &&
+        !isProjector &&
+        !knownPlayerPhase &&
+        session.phase !== "photo_distribution" && (
         <div className="card">
           <h2>Connected</h2>
           <p className="muted">Waiting for the game state to sync…</p>
@@ -1984,9 +2282,9 @@ export default function App() {
           {!canVote && session.showdown.eligibleVoters?.length > 0 && (
             <p className="muted" style={{ marginTop: "1rem" }}>
               {session.showdown.bothFolded
-                ? "Both authors folded this round. No points awarded."
+                ? "Both authors were too busy gooning to answer. No voting."
                 : session.showdown.foldedAuthorIds?.length === 1
-                ? "One author failed to answer this round. No voting."
+                ? "One author didn't have enough aura. No voting."
                 : session.showdown.myVote
                 ? `You voted ${session.showdown.myVote}.`
                 : "You wrote one of these answers — sit tight."}
@@ -2001,11 +2299,7 @@ export default function App() {
         </div>
       )}
 
-      {session && !isProjector && ended && (
-        <div className="card">
-          <p style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>scoremaxxer</p>
-        </div>
-      )}
+      {/* Intentionally render nothing for players on score phases. */}
     </div>
   );
 }

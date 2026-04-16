@@ -415,6 +415,18 @@ label {
 .layout--projector {
   max-width: min(96vw, 1320px);
   padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 3rem;
+  min-height: 100dvh;
+}
+
+.layout--projector-vote-fit {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  padding-bottom: 1rem;
+}
+
+.layout--projector-vote-fit .projector-root {
+  height: 100%;
 }
 
 .layout--projector .projector-card {
@@ -426,6 +438,9 @@ label {
 
 .projector-root {
   width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .projector-top {
@@ -465,6 +480,34 @@ label {
   margin: 0.35rem 0 0;
   font-size: clamp(0.8rem, 1.35vw, 0.95rem);
   text-align: left;
+}
+
+.projector-top--match-player {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 1.75rem;
+}
+
+.projector-match-player-tagline {
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  max-width: 42rem;
+}
+
+/* Restore card chrome on projector when matching handheld layout (overrides .layout--projector .projector-card reset). */
+.layout--projector .projector-card--surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.25rem 1.35rem;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.layout--projector .projector-card--surface h2 {
+  margin-bottom: 0;
 }
 
 .projector-card {
@@ -746,11 +789,69 @@ label {
   gap: 0.9rem;
 }
 
+.projector-photo-round--vote-fit {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.layout--projector-vote-fit .projector-ballot-complete-heading {
+  margin: 0 0 0.3rem;
+  font-size: clamp(0.76rem, 1.1vh, 0.92rem);
+}
+
+.layout--projector-vote-fit .projector-ballot-name-chips {
+  margin-bottom: clamp(0.3rem, 0.8vh, 0.6rem);
+  gap: clamp(0.2rem, 0.5vh, 0.4rem) clamp(0.3rem, 0.7vh, 0.55rem);
+  max-height: clamp(1.2rem, 3vh, 2.4rem);
+  overflow: hidden;
+}
+
+.layout--projector-vote-fit .projector-ballot-name-chip {
+  padding: clamp(0.15rem, 0.35vh, 0.25rem) clamp(0.4rem, 0.9vh, 0.65rem);
+  font-size: clamp(0.68rem, 0.95vh, 0.85rem);
+}
+
+.layout--projector-vote-fit .projector-card-title--vote-fit {
+  margin: 0 0 clamp(0.3rem, 0.7vh, 0.55rem);
+  font-size: clamp(0.95rem, 1.6vh, 1.3rem);
+}
+
+.projector-photo-grid--vote-fit {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(var(--vote-grid-cols), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--vote-grid-rows), minmax(0, 1fr));
+  align-content: stretch;
+  align-items: stretch;
+  gap: clamp(0.25rem, 0.75vh, 0.6rem);
+  overflow: hidden;
+}
+
 .projector-photo-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.75rem;
   background: rgba(0, 0, 0, 0.2);
+}
+
+.projector-photo-card--vote-fit {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  padding: clamp(0.25rem, 0.6vh, 0.5rem);
+  overflow: hidden;
+}
+
+.projector-photo-card--vote-fit .projector-photo-number {
+  margin: 0 0 clamp(0.15rem, 0.4vh, 0.35rem);
+  font-size: clamp(0.74rem, 1.2vh, 0.92rem);
+  line-height: 1.15;
 }
 
 .projector-photo-number {
@@ -766,6 +867,25 @@ label {
   border-radius: 10px;
   border: 1px solid var(--border);
   display: block;
+}
+
+.projector-photo-card--vote-fit img,
+.projector-photo-card--vote-fit .projector-photo-placeholder {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+
+.projector-photo-card--vote-fit .projector-photo-caption {
+  margin: clamp(0.18rem, 0.45vh, 0.4rem) 0 0;
+  font-size: clamp(0.7rem, 1.1vh, 0.88rem);
+  line-height: 1.2;
+  overflow: hidden;
+  line-clamp: 2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .projector-photo-placeholder {
@@ -786,6 +906,253 @@ label {
   font-size: 0.98rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+/* Photo upload — square preview matches projector grid */
+.photo-upload-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.photo-upload-file-label {
+  display: inline-block;
+  margin-top: 0.75rem;
+  padding: 0.65rem 1.1rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.photo-upload-file-label:hover {
+  filter: brightness(1.06);
+}
+
+.photo-upload-preview {
+  width: 100%;
+  max-width: 360px;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  margin-top: 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+/* Photo crop modal (1:1) */
+.photo-crop-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.photo-crop-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 17, 20, 0.88);
+}
+
+.photo-crop-modal-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  padding: 1.25rem 1.35rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.photo-crop-modal-title {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 400;
+}
+
+.photo-crop-modal-hint {
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.photo-crop-viewport {
+  position: relative;
+  width: min(320px, 85vw);
+  height: min(320px, 85vw);
+  margin: 0 auto 1rem;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  touch-action: none;
+  cursor: grab;
+}
+
+.photo-crop-viewport:active {
+  cursor: grabbing;
+}
+
+.photo-crop-pan-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.photo-crop-pan-layer--loading {
+  transform: translate(-50%, -50%);
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+.photo-crop-pan-layer--loading .photo-crop-img {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.photo-crop-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+  pointer-events: none;
+}
+
+.photo-crop-zoom-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.photo-crop-zoom-label input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.photo-crop-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.photo-crop-actions--single {
+  justify-content: stretch;
+}
+
+.photo-crop-actions--single .photo-crop-primary {
+  flex: 1;
+}
+
+.photo-crop-secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.photo-crop-primary {
+  background: linear-gradient(135deg, var(--accent), #c9a22e);
+  color: #1a1408;
+}
+
+/* Projector — photo round full-ballot progress (names, wrap left → right) */
+.projector-ballot-complete-heading {
+  margin: 0 0 0.45rem;
+  font-size: clamp(0.85rem, 1.4vw, 1rem);
+}
+
+.projector-ballot-name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 1rem;
+}
+
+.projector-ballot-name-chip {
+  display: inline-block;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(139, 149, 168, 0.1);
+  font-size: clamp(0.92rem, 1.5vw, 1.12rem);
+  white-space: nowrap;
+  color: var(--text);
+}
+
+/* Photo round — independent rank voting (3rd / 2nd / 1st) */
+.photo-rank-vote-card h2 {
+  margin-bottom: 0.35rem;
+}
+
+.photo-rank-vote-row {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.photo-rank-vote-row:first-of-type {
+  border-top: none;
+  padding-top: 0.25rem;
+}
+
+.photo-rank-vote-heading {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: var(--font-sans);
+}
+
+.photo-rank-vote-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.photo-rank-vote-btn {
+  min-width: 2.75rem;
+  padding: 0.5rem 0.65rem;
+  font-weight: 700;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.photo-rank-vote-btn.is-selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+
+.photo-rank-vote-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 @keyframes projector-score-drop-in {

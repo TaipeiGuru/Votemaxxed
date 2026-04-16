@@ -31,6 +31,12 @@ const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
 const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
 const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
 const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
+/** How long the projector shows the round-2 vote breakdown (`photo_distribution`) before the end transition. */
+const PHOTO_DISTRIBUTION_VISIBLE_MS = 5000;
+/** Point leaderboard after round 1 (before photo round); tuned for score-drop animation (~1300ms per score group). */
+const ROUND1_LEADERBOARD_MS = 15000;
+/** Full-screen style pause before round 2 photo uploads begin. */
+const ROUND2_SPLASH_MS = 3000;
 const PHOTO_END_TRANSITION_MS = 2500;
 const PHOTO_VOTE_POINTS = {
   third: 50,
@@ -188,6 +194,28 @@ function sessionSnapshot(sess, forPlayerId) {
     };
   }
 
+  if (sess.phase === "round1_scores") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
+    };
+  }
+
+  if (sess.phase === "round2_splash") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
+    };
+  }
+
   if (isPhotoRoundPhase(sess.phase)) {
     const isProjectorViewer = forPlayerId === PROJECTOR_SENTINEL_ID;
     const pr = sess.photoRound || {};
@@ -238,7 +266,6 @@ function sessionSnapshot(sess, forPlayerId) {
             : null,
         myCaptionText,
         myCaptionSubmitted: (pr.captionSubmittedBy || []).includes(forPlayerId),
-        votingStage: pr.votingStage || "third",
         voteChoices: (pr.pairings || []).map((p) => p.number),
         myVotes: {
           third: myVoteState.third ?? null,
@@ -247,11 +274,12 @@ function sessionSnapshot(sess, forPlayerId) {
         },
         voteProgress: isProjectorViewer
           ? {
-              cast: Object.keys(pr.rankedVotes || {}).filter((pid) => {
-                const ballot = pr.rankedVotes?.[pid] || {};
-                return !!ballot[pr.votingStage || "third"];
-              }).length,
-              needed: sess.players.length,
+              ballotComplete: sess.players
+                .filter((p) => {
+                  const ballot = pr.rankedVotes?.[p.id] || {};
+                  return !!(ballot.third && ballot.second && ballot.first);
+                })
+                .map((p) => ({ id: p.id, name: p.name })),
             }
           : undefined,
         pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
@@ -477,14 +505,15 @@ function findSessionByCode(code) {
 function broadcastSession(sess) {
   const io = globalThis.__io;
   if (!io) return;
-  for (const p of sess.players) {
-    io.to(p.socketId).emit("session_state", sessionSnapshot(sess, p.id));
-  }
+  /** Projector first so phase transitions (e.g. round 1 → scoreboard) land on the big screen before player handsets. */
   if (sess.projectors?.length) {
     const projSnap = sessionSnapshotForProjector(sess);
     for (const pr of sess.projectors) {
       io.to(pr.socketId).emit("session_state", projSnap);
     }
+  }
+  for (const p of sess.players) {
+    io.to(p.socketId).emit("session_state", sessionSnapshot(sess, p.id));
   }
 }
 
@@ -511,6 +540,20 @@ function clearAnsweringTimer(sess) {
   if (sess._answeringFinalizeTimer) {
     clearTimeout(sess._answeringFinalizeTimer);
     sess._answeringFinalizeTimer = null;
+  }
+}
+
+function clearRound1LeaderboardTimer(sess) {
+  if (sess._round1LeaderboardTimer) {
+    clearTimeout(sess._round1LeaderboardTimer);
+    sess._round1LeaderboardTimer = null;
+  }
+}
+
+function clearRound2SplashTimer(sess) {
+  if (sess._round2SplashTimer) {
+    clearTimeout(sess._round2SplashTimer);
+    sess._round2SplashTimer = null;
   }
 }
 
@@ -591,7 +634,6 @@ function initPhotoRoundState(sess) {
     captionEndsAt: null,
     pairings,
     rankedVotes: {},
-    votingStage: "third",
   };
 }
 
@@ -603,11 +645,12 @@ function allCaptionsSubmitted(sess) {
   return (sess.photoRound?.captionSubmittedBy || []).length >= sess.players.length;
 }
 
-function allRankVotesSubmittedForStage(sess) {
-  const stage = sess.photoRound?.votingStage || "third";
+function allPhotoBallotsComplete(sess) {
+  const pr = sess.photoRound;
+  if (!pr) return false;
   for (const p of sess.players) {
-    const ballot = sess.photoRound?.rankedVotes?.[p.id] || {};
-    if (!ballot[stage]) return false;
+    const ballot = pr.rankedVotes?.[p.id] || {};
+    if (!ballot.third || !ballot.second || !ballot.first) return false;
   }
   return true;
 }
@@ -630,7 +673,6 @@ function startPhotoCaptioning(sess) {
 function startPhotoVoting(sess) {
   if (sess.phase !== "photo_vote_loading") return;
   sess.phase = "photo_voting";
-  sess.photoRound.votingStage = "third";
   broadcastSession(sess);
 }
 
@@ -675,19 +717,8 @@ function finalizePhotoVotingAndScore(sess) {
         setWinnerFromScores(s3);
         broadcastSession(s3);
       }, PHOTO_END_TRANSITION_MS);
-    }, PHOTO_END_TRANSITION_MS);
+    }, PHOTO_DISTRIBUTION_VISIBLE_MS);
   }, PHOTO_DISTRIBUTION_REVIEW_MS);
-}
-
-function movePhotoVotingToNextStageOrFinish(sess) {
-  const stage = sess.photoRound?.votingStage || "third";
-  const idx = PHOTO_VOTE_STAGE_ORDER.indexOf(stage);
-  if (idx === -1 || idx === PHOTO_VOTE_STAGE_ORDER.length - 1) {
-    finalizePhotoVotingAndScore(sess);
-    return;
-  }
-  sess.photoRound.votingStage = PHOTO_VOTE_STAGE_ORDER[idx + 1];
-  broadcastSession(sess);
 }
 
 function finalizePhotoCaptioning(sess) {
@@ -734,7 +765,40 @@ function finalizePhotoUpload(sess) {
   }, PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS);
 }
 
+function beginRound1Leaderboard(sess) {
+  clearRound1LeaderboardTimer(sess);
+  clearShowdownTimers(sess);
+  sess.bothFoldTimeline = null;
+  sess.showdownReviewActive = false;
+  sess.showdownSplashActive = false;
+  sess.phase = "round1_scores";
+  const code = sess.code;
+  broadcastSession(sess);
+  sess._round1LeaderboardTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "round1_scores") return;
+    s._round1LeaderboardTimer = null;
+    startRound2Splash(s);
+  }, ROUND1_LEADERBOARD_MS);
+}
+
+function startRound2Splash(sess) {
+  clearRound2SplashTimer(sess);
+  sess.phase = "round2_splash";
+  broadcastSession(sess);
+  const code = sess.code;
+  sess._round2SplashTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "round2_splash") return;
+    s._round2SplashTimer = null;
+    startPhotoRound(s);
+    broadcastSession(s);
+  }, ROUND2_SPLASH_MS);
+}
+
 function startPhotoRound(sess) {
+  clearRound1LeaderboardTimer(sess);
+  clearRound2SplashTimer(sess);
   clearPhotoRoundTimers(sess);
   initPhotoRoundState(sess);
   sess.phase = "photo_upload";
@@ -781,7 +845,7 @@ function beginShowdownFromAnswering(sess) {
 function bumpShowdownQueueAndMaybeEnd(sess) {
   sess.currentQueueIndex++;
   if (sess.currentQueueIndex >= sess.showdownQueue.length) {
-    startPhotoRound(sess);
+    beginRound1Leaderboard(sess);
   }
 }
 
@@ -1314,6 +1378,8 @@ function startServer() {
       sess.showdownReviewActive = false;
       sess.showdownSplashActive = false;
       clearShowdownTimers(sess);
+      clearRound1LeaderboardTimer(sess);
+      clearRound2SplashTimer(sess);
       clearPhotoRoundTimers(sess);
       sess.photoRound = null;
 
@@ -1581,7 +1647,7 @@ function startServer() {
       }
     });
 
-    socket.on("submit_photo_rank_vote", ({ number } = {}, cb) => {
+    socket.on("submit_photo_rank_vote", ({ rank, number } = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1597,31 +1663,32 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
         return;
       }
+      const rankKey = rank === "first" || rank === "second" || rank === "third" ? rank : null;
+      if (!rankKey) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid rank (use third, second, or first)." });
+        return;
+      }
       const choice = Number(number);
       const validChoices = new Set((pr.pairings || []).map((p) => p.number));
       if (!validChoices.has(choice)) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid choice." });
         return;
       }
-      const stage = pr.votingStage || "third";
-      const ballot = pr.rankedVotes[player.id] || {};
-      if (ballot[stage]) {
-        if (typeof cb === "function") cb({ ok: false, error: "You already voted this stage." });
-        return;
+      const ballot = { ...(pr.rankedVotes[player.id] || {}) };
+      for (const k of PHOTO_VOTE_STAGE_ORDER) {
+        if (k === rankKey) continue;
+        if (ballot[k] === choice) {
+          if (typeof cb === "function") {
+            cb({ ok: false, error: "You cannot use the same pairing for two ranks." });
+          }
+          return;
+        }
       }
-      if (Object.values(ballot).includes(choice)) {
-        if (typeof cb === "function") cb({ ok: false, error: "You cannot reuse a ranking choice." });
-        return;
-      }
-      ballot[stage] = choice;
+      ballot[rankKey] = choice;
       pr.rankedVotes[player.id] = ballot;
       if (typeof cb === "function") cb({ ok: true });
-      if (allRankVotesSubmittedForStage(sess)) {
-        if (stage === "first") {
-          finalizePhotoVotingAndScore(sess);
-        } else {
-          movePhotoVotingToNextStageOrFinish(sess);
-        }
+      if (allPhotoBallotsComplete(sess)) {
+        finalizePhotoVotingAndScore(sess);
       } else {
         broadcastSession(sess);
       }
@@ -1712,6 +1779,8 @@ function startServer() {
       } else {
         clearAnsweringTimer(sess);
         clearShowdownTimers(sess);
+        clearRound1LeaderboardTimer(sess);
+        clearRound2SplashTimer(sess);
         clearPhotoRoundTimers(sess);
         sessions.delete(sess.code);
         io.to(sess.code).emit("session_state", {
