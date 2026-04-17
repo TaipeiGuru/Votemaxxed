@@ -116,8 +116,40 @@ app.use(express.json());
 /** @type {Map<string, object>} */
 const sessions = new Map();
 
+/** Lucide icon keys; one unique assignment per player (max 10). */
+const HOST_ICON_KEY = "chess-queen";
+const PLAYER_ICON_KEYS = [
+  "heart",
+  "hourglass",
+  HOST_ICON_KEY,
+  "club",
+  "chess-knight",
+  "gem",
+  "rocket",
+  "skull",
+  "flame",
+  "dumbbell",
+];
+
+const MAX_PLAYERS = 10;
+
+function ensureIconDeck(sess) {
+  if (sess._iconDeck == null) {
+    sess._iconDeck = shuffle([...PLAYER_ICON_KEYS.filter((k) => k !== HOST_ICON_KEY)]);
+    sess._iconDeckCursor = 0;
+  }
+}
+
+function takeNextIconKey(sess) {
+  ensureIconDeck(sess);
+  if (sess._iconDeckCursor >= sess._iconDeck.length) {
+    throw new Error("Icon deck exhausted");
+  }
+  return sess._iconDeck[sess._iconDeckCursor++];
+}
+
 function publicPlayer(p) {
-  return { id: p.id, name: p.name };
+  return { id: p.id, name: p.name, iconKey: p.iconKey };
 }
 
 function publicLastResult(r) {
@@ -279,7 +311,7 @@ function sessionSnapshot(sess, forPlayerId) {
                   const ballot = pr.rankedVotes?.[p.id] || {};
                   return !!(ballot.third && ballot.second && ballot.first);
                 })
-                .map((p) => ({ id: p.id, name: p.name })),
+                .map((p) => ({ id: p.id, name: p.name, iconKey: p.iconKey })),
             }
           : undefined,
         pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
@@ -426,8 +458,8 @@ function liveVoterRowsForShowdown(sess, sd) {
   for (const p of sess.players) {
     if (authors.includes(p.id)) continue;
     const c = votes[p.id];
-    if (c === "A") votersForA.push({ id: p.id, name: p.name });
-    else if (c === "B") votersForB.push({ id: p.id, name: p.name });
+    if (c === "A") votersForA.push({ id: p.id, name: p.name, iconKey: p.iconKey });
+    else if (c === "B") votersForB.push({ id: p.id, name: p.name, iconKey: p.iconKey });
   }
   return { votersForA, votersForB };
 }
@@ -457,7 +489,7 @@ function computeAnswerProgress(sess) {
   const done = [];
   const waiting = [];
   for (const p of sess.players) {
-    const row = { id: p.id, name: p.name };
+    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
     if (playerHasBothAnswersSaved(sess, p.id)) done.push(row);
     else waiting.push(row);
   }
@@ -469,7 +501,7 @@ function computePhotoUploadProgress(sess) {
   const done = [];
   const waiting = [];
   for (const p of sess.players) {
-    const row = { id: p.id, name: p.name };
+    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
     if (doneSet.has(p.id)) done.push(row);
     else waiting.push(row);
   }
@@ -481,7 +513,7 @@ function computePhotoCaptionProgress(sess) {
   const done = [];
   const waiting = [];
   for (const p of sess.players) {
-    const row = { id: p.id, name: p.name };
+    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
     if (doneSet.has(p.id)) done.push(row);
     else waiting.push(row);
   }
@@ -602,6 +634,7 @@ function setWinnerFromScores(sess) {
   }
   sess.winner = {
     names: winners.map((w) => w.name),
+    players: winners.map(publicPlayer),
     score: best,
   };
 }
@@ -986,8 +1019,9 @@ function advanceShowdown(sess) {
     const c = votes[vid];
     const pl = sess.players.find((p) => p.id === vid);
     const nm = pl?.name ?? "?";
-    if (c === "A") votersForA.push(nm);
-    else if (c === "B") votersForB.push(nm);
+    const iconKey = pl?.iconKey;
+    if (c === "A") votersForA.push({ id: vid, name: nm, iconKey });
+    else if (c === "B") votersForB.push({ id: vid, name: nm, iconKey });
   }
 
   const authorAName = sess.players.find((p) => p.id === authors[0])?.name ?? "?";
@@ -1003,6 +1037,7 @@ function advanceShowdown(sess) {
       promptText,
       winningAnswer,
       winningAuthorName: sess.players.find((p) => p.id === winningAuthor)?.name ?? "?",
+      winningAuthorId: winningAuthor,
     };
     console.log("[MOG] (no DB) saved pair:", {
       promptText,
@@ -1043,6 +1078,8 @@ function advanceShowdown(sess) {
       answerBText,
       authorAName,
       authorBName,
+      authorAId: authors[0],
+      authorBId: authors[1],
       votersForA,
       votersForB,
     },
@@ -1092,18 +1129,19 @@ function startServer() {
       const sess = {
         code,
         hostPlayerId,
-        players: [
-          {
-            id: hostPlayerId,
-            name,
-            socketId: socket.id,
-          },
-        ],
+        players: [],
         projectors: [],
         phase: "lobby",
         customPrompts: [],
         answerTimeLimitSec: DEFAULT_ANSWER_TIME_SEC,
       };
+      ensureIconDeck(sess);
+      sess.players.push({
+        id: hostPlayerId,
+        name,
+        socketId: socket.id,
+        iconKey: HOST_ICON_KEY,
+      });
       sessions.set(code, sess);
       socket.join(code);
       if (typeof cb === "function") {
@@ -1136,8 +1174,21 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Name already taken." });
         return;
       }
+      if (sess.players.length >= MAX_PLAYERS) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Session is full (10 players max)." });
+        }
+        return;
+      }
       const playerId = nanoid(12);
-      sess.players.push({ id: playerId, name: playerName, socketId: socket.id });
+      ensureIconDeck(sess);
+      const isBecomingHost = !sess.hostPlayerId;
+      sess.players.push({
+        id: playerId,
+        name: playerName,
+        socketId: socket.id,
+        iconKey: isBecomingHost ? HOST_ICON_KEY : takeNextIconKey(sess),
+      });
       if (!sess.hostPlayerId) {
         sess.hostPlayerId = playerId;
       }
@@ -1168,6 +1219,7 @@ function startServer() {
           customPrompts: [],
           answerTimeLimitSec: DEFAULT_ANSWER_TIME_SEC,
         };
+        ensureIconDeck(sess);
         sessions.set(newCode, sess);
         socket.join(sess.code);
         if (typeof cb === "function") cb({ ok: true, code: sess.code, created: true });
@@ -1773,6 +1825,7 @@ function startServer() {
         } else {
           if (sess.hostPlayerId === player.id) {
             sess.hostPlayerId = sess.players[0].id;
+            sess.players[0].iconKey = HOST_ICON_KEY;
           }
           broadcastSession(sess);
         }
