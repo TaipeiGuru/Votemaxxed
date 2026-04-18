@@ -252,6 +252,11 @@ label {
   margin-bottom: 0.35rem;
 }
 
+/* Round 1 showdown: keep author badges readable but less visually dominant than answers/voters */
+.vote-distribution-author-wrap--muted {
+  opacity: 0.5;
+}
+
 @keyframes mog-pulse {
   0%,
   100% {

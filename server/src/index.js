@@ -42,6 +42,8 @@ const ROUND2_SPLASH_MS = 3000;
 const PHOTO_END_TRANSITION_MS = 2500;
 /** Splash before the end-game scoreboard (after photo round wrap-up). */
 const FINAL_RESULTS_TRANSITION_MS = 4000;
+/** Pause on all clients after "Play again" before a new answering phase. */
+const PLAY_AGAIN_TRANSITION_MS = 3500;
 const PHOTO_VOTE_POINTS = {
   third: 50,
   second: 100,
@@ -260,6 +262,18 @@ function sessionSnapshot(sess, forPlayerId) {
       lastResult: publicLastResult(sess.lastShowdownResult),
       winner: null,
       showdown: null,
+    };
+  }
+
+  if (sess.phase === "play_again_transition") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: sess.winner ?? null,
+      showdown: null,
+      playAgainEndsAt: sess.playAgainEndsAt ?? null,
     };
   }
 
@@ -630,6 +644,100 @@ function clearPhotoRoundTimers(sess) {
     clearTimeout(sess._finalResultsTransitionTimer);
     sess._finalResultsTransitionTimer = null;
   }
+}
+
+function clearPlayAgainTimer(sess) {
+  if (sess._playAgainTimer) {
+    clearTimeout(sess._playAgainTimer);
+    sess._playAgainTimer = null;
+  }
+  sess.playAgainEndsAt = null;
+}
+
+function clearAllGameTimers(sess) {
+  clearAnsweringTimer(sess);
+  clearShowdownTimers(sess);
+  clearRound1LeaderboardTimer(sess);
+  clearRound2SplashTimer(sess);
+  clearPhotoRoundTimers(sess);
+  clearPlayAgainTimer(sess);
+}
+
+/**
+ * Build a fresh round from current `sess.players` and `sess.customPrompts`; set phase to answering and start timers.
+ * Caller must ensure phase and player count are appropriate.
+ */
+function commenceAnsweringPhase(sess) {
+  clearPlayAgainTimer(sess);
+  const n = sess.players.length;
+  const pool = buildGamePrompts(n, sess.customPrompts || []);
+  const playerIds = sess.players.map((p) => p.id);
+  const assignments = buildAssignments(playerIds);
+  sess.gamePrompts = pool.map((p) => ({ id: p.id, text: p.text }));
+  sess.assignments = assignments;
+  sess.answers = {};
+  sess.alternatePrompts = buildUniqueAlternatePrompts(sess.gamePrompts);
+  sess.promptAltRequestedBy = {};
+  sess.promptAltSwapped = {};
+  sess.promptAltLocked = {};
+  sess.promptAltRejectedBy = {};
+  for (let i = 0; i < sess.gamePrompts.length; i++) {
+    const key = String(i);
+    sess.promptAltRequestedBy[key] = [];
+    sess.promptAltSwapped[key] = false;
+    sess.promptAltLocked[key] = false;
+    sess.promptAltRejectedBy[key] = null;
+  }
+  sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
+  sess.phase = "answering";
+  sess.answerSubmittedBy = [];
+  const answerLimitSec = sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC;
+  sess.answeringEndsAt = Date.now() + answerLimitSec * 1000;
+  clearAnsweringTimer(sess);
+  const code = sess.code;
+  sess._answeringTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "answering") return;
+    s._answeringTimer = null;
+    const io2 = globalThis.__io;
+    if (io2) io2.to(s.code).emit("answer_time_up");
+    s._answeringFinalizeTimer = setTimeout(() => {
+      const s2 = sessions.get(code);
+      if (!s2 || s2.phase !== "answering") return;
+      s2._answeringFinalizeTimer = null;
+      for (const p of s2.players) {
+        if ((s2.answerSubmittedBy || []).includes(p.id)) continue;
+        const mine = s2.assignments
+          .filter((a) => a.authorIds.includes(p.id))
+          .map((a) => String(a.promptIndex));
+        for (const key of mine) {
+          const text = String(s2.answers?.[key]?.[p.id] ?? "").slice(0, 50);
+          if (!s2.answers[key]) s2.answers[key] = {};
+          s2.answers[key][p.id] = text;
+        }
+        s2.answerSubmittedBy.push(p.id);
+      }
+      beginShowdownFromAnswering(s2);
+      broadcastSession(s2);
+    }, ANSWER_TIMEUP_SUBMIT_GRACE_MS);
+  }, answerLimitSec * 1000);
+
+  const showdownQueue = [];
+  for (let pass = 0; pass < SHOWDOWN_PASSES; pass++) {
+    for (let i = 0; i < n; i++) showdownQueue.push(i);
+  }
+  sess.showdownQueue = showdownQueue;
+  sess.currentQueueIndex = 0;
+  sess.showdownVotes = {};
+  sess.lastShowdownResult = null;
+  sess.winner = null;
+  sess.showdownReviewActive = false;
+  sess.showdownSplashActive = false;
+  clearShowdownTimers(sess);
+  clearRound1LeaderboardTimer(sess);
+  clearRound2SplashTimer(sess);
+  clearPhotoRoundTimers(sess);
+  sess.photoRound = null;
 }
 
 function setWinnerFromScores(sess) {
@@ -1390,10 +1498,8 @@ function startServer() {
         return;
       }
 
-      const n = sess.players.length;
-      let pool;
       try {
-        pool = buildGamePrompts(n, sess.customPrompts || []);
+        commenceAnsweringPhase(sess);
       } catch (e) {
         if (typeof cb === "function") {
           cb({ ok: false, error: e.message || "Could not pick prompts." });
@@ -1401,73 +1507,124 @@ function startServer() {
         return;
       }
 
-      const playerIds = sess.players.map((p) => p.id);
-      const assignments = buildAssignments(playerIds);
-      sess.gamePrompts = pool.map((p) => ({ id: p.id, text: p.text }));
-      sess.assignments = assignments;
-      sess.answers = {};
-      sess.alternatePrompts = buildUniqueAlternatePrompts(sess.gamePrompts);
-      sess.promptAltRequestedBy = {};
-      sess.promptAltSwapped = {};
-      sess.promptAltLocked = {};
-      sess.promptAltRejectedBy = {};
-      for (let i = 0; i < sess.gamePrompts.length; i++) {
-        const key = String(i);
-        sess.promptAltRequestedBy[key] = [];
-        sess.promptAltSwapped[key] = false;
-        sess.promptAltLocked[key] = false;
-        sess.promptAltRejectedBy[key] = null;
-      }
-      sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
-      sess.phase = "answering";
-      sess.answerSubmittedBy = [];
-      const answerLimitSec = sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC;
-      sess.answeringEndsAt = Date.now() + answerLimitSec * 1000;
-      clearAnsweringTimer(sess);
-      const code = sess.code;
-      sess._answeringTimer = setTimeout(() => {
-        const s = sessions.get(code);
-        if (!s || s.phase !== "answering") return;
-        s._answeringTimer = null;
-        const io2 = globalThis.__io;
-        if (io2) io2.to(s.code).emit("answer_time_up");
-        s._answeringFinalizeTimer = setTimeout(() => {
-          const s2 = sessions.get(code);
-          if (!s2 || s2.phase !== "answering") return;
-          s2._answeringFinalizeTimer = null;
-          for (const p of s2.players) {
-            if ((s2.answerSubmittedBy || []).includes(p.id)) continue;
-            const mine = s2.assignments
-              .filter((a) => a.authorIds.includes(p.id))
-              .map((a) => String(a.promptIndex));
-            for (const key of mine) {
-              const text = String(s2.answers?.[key]?.[p.id] ?? "").slice(0, 50);
-              if (!s2.answers[key]) s2.answers[key] = {};
-              s2.answers[key][p.id] = text;
-            }
-            s2.answerSubmittedBy.push(p.id);
-          }
-          beginShowdownFromAnswering(s2);
-          broadcastSession(s2);
-        }, ANSWER_TIMEUP_SUBMIT_GRACE_MS);
-      }, answerLimitSec * 1000);
+      if (typeof cb === "function") cb({ ok: true });
+      broadcastSession(sess);
+    });
 
-      const showdownQueue = [];
-      for (let pass = 0; pass < SHOWDOWN_PASSES; pass++) {
-        for (let i = 0; i < n; i++) showdownQueue.push(i);
+    socket.on("play_again", (_, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
       }
-      sess.showdownQueue = showdownQueue;
-      sess.currentQueueIndex = 0;
-      sess.showdownVotes = {};
-      sess.lastShowdownResult = null;
+      const { sess, player } = found;
+      if (player.id !== sess.hostPlayerId) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only the host can start another game." });
+        return;
+      }
+      if (sess.phase !== "ended") {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Play again is only available after the game ends." });
+        }
+        return;
+      }
+      if (sess.players.length < 3) {
+        if (typeof cb === "function") {
+          cb({
+            ok: false,
+            error: "Need at least 3 players so there are voters for each prompt.",
+          });
+        }
+        return;
+      }
+
+      clearAllGameTimers(sess);
+      const code = sess.code;
+      sess.phase = "play_again_transition";
+      sess.playAgainEndsAt = Date.now() + PLAY_AGAIN_TRANSITION_MS;
+      sess._playAgainTimer = setTimeout(() => {
+        const s = sessions.get(code);
+        if (!s || s.phase !== "play_again_transition") return;
+        s._playAgainTimer = null;
+        try {
+          commenceAnsweringPhase(s);
+        } catch (e) {
+          console.error("[play_again]", e);
+          s.phase = "ended";
+          broadcastSession(s);
+          return;
+        }
+        broadcastSession(s);
+      }, PLAY_AGAIN_TRANSITION_MS);
+
+      if (typeof cb === "function") cb({ ok: true });
+      broadcastSession(sess);
+    });
+
+    socket.on("new_game", (_, cb) => {
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+      if (player.id !== sess.hostPlayerId) {
+        if (typeof cb === "function") cb({ ok: false, error: "Only the host can start a new game." });
+        return;
+      }
+      if (sess.phase !== "ended") {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "New game is only available after the game ends." });
+        }
+        return;
+      }
+
+      clearAllGameTimers(sess);
+
+      const oldCode = sess.code;
+      let newCode = genCode();
+      while (sessions.has(newCode)) newCode = genCode();
+      sessions.delete(oldCode);
+      sess.code = newCode;
+      sessions.set(newCode, sess);
+
+      for (const p of sess.players) {
+        const sock = io.sockets.sockets.get(p.socketId);
+        if (sock) {
+          sock.leave(oldCode);
+          sock.join(newCode);
+        }
+      }
+      for (const pr of sess.projectors || []) {
+        const sock = io.sockets.sockets.get(pr.socketId);
+        if (sock) {
+          sock.leave(oldCode);
+          sock.join(newCode);
+        }
+      }
+
+      sess.phase = "lobby";
+      sess.customPrompts = [];
       sess.winner = null;
-      sess.showdownReviewActive = false;
-      sess.showdownSplashActive = false;
-      clearShowdownTimers(sess);
-      clearRound1LeaderboardTimer(sess);
-      clearRound2SplashTimer(sess);
-      clearPhotoRoundTimers(sess);
       sess.photoRound = null;
+      sess.lastShowdownResult = null;
+      sess.scores = {};
+      delete sess.gamePrompts;
+      delete sess.assignments;
+      delete sess.answers;
+      delete sess.alternatePrompts;
+      delete sess.promptAltRequestedBy;
+      delete sess.promptAltSwapped;
+      delete sess.promptAltLocked;
+      delete sess.promptAltRejectedBy;
+      delete sess.showdownQueue;
+      delete sess.currentQueueIndex;
+      delete sess.showdownVotes;
+      delete sess.showdownReviewActive;
+      delete sess.showdownSplashActive;
+      delete sess.answerSubmittedBy;
+      delete sess.answeringEndsAt;
+      delete sess.bothFoldTimeline;
 
       if (typeof cb === "function") cb({ ok: true });
       broadcastSession(sess);
@@ -1863,14 +2020,24 @@ function startServer() {
           }
           broadcastSession(sess);
         }
+      } else if (sess.phase === "play_again_transition") {
+        clearPlayAgainTimer(sess);
+        sess.players = sess.players.filter((p) => p.id !== player.id);
+        if (sess.players.length === 0) {
+          sessions.delete(sess.code);
+          return;
+        }
+        if (sess.hostPlayerId === player.id) {
+          sess.hostPlayerId = sess.players[0].id;
+          sess.players[0].iconKey = HOST_ICON_KEY;
+        }
+        sess.phase = "ended";
+        broadcastSession(sess);
       } else {
-        clearAnsweringTimer(sess);
-        clearShowdownTimers(sess);
-        clearRound1LeaderboardTimer(sess);
-        clearRound2SplashTimer(sess);
-        clearPhotoRoundTimers(sess);
+        clearAllGameTimers(sess);
+        const goneCode = sess.code;
         sessions.delete(sess.code);
-        io.to(sess.code).emit("session_state", {
+        io.to(goneCode).emit("session_state", {
           phase: "gone",
           message: "A player left — session ended.",
         });

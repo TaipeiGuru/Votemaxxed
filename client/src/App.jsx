@@ -284,9 +284,34 @@ function projectorVoterChipEntries(voters) {
   }));
 }
 
+function ordinalRank(n) {
+  const abs = Math.floor(Math.abs(Number(n)) || 0);
+  const cent = abs % 100;
+  if (cent >= 11 && cent <= 13) return `${abs}th`;
+  switch (abs % 10) {
+    case 1:
+      return `${abs}st`;
+    case 2:
+      return `${abs}nd`;
+    case 3:
+      return `${abs}rd`;
+    default:
+      return `${abs}th`;
+  }
+}
+
+/** Competition-style rank: 1 + number of players with a strictly higher score (ties share a rank). */
+function endgameStandingForPlayer(you, players, scores) {
+  if (!you || !players?.length) return null;
+  const myScore = Number(scores?.[you] ?? 0);
+  const higher = players.filter((p) => Number(scores?.[p.id] ?? 0) > myScore).length;
+  return { score: myScore, rank: higher + 1, total: players.length };
+}
+
 /** Shared projector layout: two answer panels + voter chips below (voting and breakdown). */
 function ProjectorDualAnswerColumns({
   showAuthors,
+  authorsMuted = false,
   authorAName,
   authorBName,
   authorAId,
@@ -312,7 +337,11 @@ function ProjectorDualAnswerColumns({
           aria-label={showAuthors ? `Answer by ${authorAName}` : "Choice A"}
         >
           {showAuthors ? (
-            <div className="vote-distribution-author-wrap">
+            <div
+              className={`vote-distribution-author-wrap${
+                authorsMuted ? " vote-distribution-author-wrap--muted" : ""
+              }`}
+            >
               {authorAPlayer ? (
                 <PlayerElement
                   name={authorAPlayer.name}
@@ -346,7 +375,11 @@ function ProjectorDualAnswerColumns({
           aria-label={showAuthors ? `Answer by ${authorBName}` : "Choice B"}
         >
           {showAuthors ? (
-            <div className="vote-distribution-author-wrap">
+            <div
+              className={`vote-distribution-author-wrap${
+                authorsMuted ? " vote-distribution-author-wrap--muted" : ""
+              }`}
+            >
               {authorBPlayer ? (
                 <PlayerElement
                   name={authorBPlayer.name}
@@ -654,6 +687,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
   const finalResultsTransition = session?.phase === "final_results_transition";
+  const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
   const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
@@ -794,6 +828,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
           ) : null}
           <ProjectorDualAnswerColumns
             showAuthors={breakdownVisible}
+            authorsMuted
             authorAName={session.lastResult?.voteBreakdown?.authorAName}
             authorBName={session.lastResult?.voteBreakdown?.authorBName}
             authorAId={session.lastResult?.voteBreakdown?.authorAId}
@@ -973,6 +1008,17 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
+      {playAgainTransition && (
+        <div className="projector-card projector-card--surface projector-photo-round">
+          <h2 className="projector-card-title" style={{ textAlign: "center", marginBottom: "0.5rem" }}>
+            Playing again
+          </h2>
+          <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
+            Next round starting…
+          </p>
+        </div>
+      )}
+
       {(round1Scores || ended) && (
         <div className="projector-card">
           <ProjectorScoreDropBoard
@@ -1111,6 +1157,7 @@ export default function App() {
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [showCustomPromptInfo, setShowCustomPromptInfo] = useState(false);
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
+  const [endgameBusy, setEndgameBusy] = useState(false);
   const [answerTimeLeftMs, setAnswerTimeLeftMs] = useState(0);
   const pendingVoteRevealRef = useRef(null);
   const altRejectTimerRef = useRef(null);
@@ -1195,7 +1242,8 @@ export default function App() {
       session?.phase === "ended" ||
       session?.phase === "round1_scores" ||
       session?.phase === "round2_splash" ||
-      session?.phase === "final_results_transition"
+      session?.phase === "final_results_transition" ||
+      session?.phase === "play_again_transition"
     ) {
       setVoteRevealVisible(session?.phase === "ended");
       pendingVoteRevealRef.current = null;
@@ -1329,6 +1377,24 @@ export default function App() {
     });
   }, [socket]);
 
+  const playAgain = useCallback(() => {
+    setError("");
+    setEndgameBusy(true);
+    socket.emit("play_again", {}, (res) => {
+      setEndgameBusy(false);
+      if (!res?.ok) setError(res?.error || "Could not play again.");
+    });
+  }, [socket]);
+
+  const newGameFromEnd = useCallback(() => {
+    setError("");
+    setEndgameBusy(true);
+    socket.emit("new_game", {}, (res) => {
+      setEndgameBusy(false);
+      if (!res?.ok) setError(res?.error || "Could not start a new game.");
+    });
+  }, [socket]);
+
   const setAnswerTimeLimit = useCallback(
     (seconds) => {
       setError("");
@@ -1456,6 +1522,8 @@ export default function App() {
         ? session?.photoRound?.captionEndsAt
         : session?.phase === "photo_voting"
         ? session?.photoRound?.voteEndsAt
+        : session?.phase === "play_again_transition"
+        ? session?.playAgainEndsAt
         : null;
     if (!timedPhaseEndsAt) {
       setAnswerTimeLeftMs(0);
@@ -1473,7 +1541,14 @@ export default function App() {
     session?.photoRound?.uploadEndsAt,
     session?.photoRound?.captionEndsAt,
     session?.photoRound?.voteEndsAt,
+    session?.playAgainEndsAt,
   ]);
+
+  useEffect(() => {
+    if (session?.phase === "lobby" && session?.code && session?.role !== "projector") {
+      setCodeInput(session.code);
+    }
+  }, [session?.phase, session?.code, session?.role]);
 
   useEffect(() => {
     if (session?.phase !== "answering") {
@@ -1534,6 +1609,7 @@ export default function App() {
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
   const finalResultsTransition = session?.phase === "final_results_transition";
+  const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
   const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
@@ -1549,6 +1625,7 @@ export default function App() {
     photoDistributionLoading ||
     photoEndTransition ||
     finalResultsTransition ||
+    playAgainTransition ||
     round1Scores ||
     round2Splash ||
     ended;
@@ -1568,6 +1645,10 @@ export default function App() {
 
   const displayCode = session?.code;
   const isProjector = session?.role === "projector";
+  const endgamePlayerStanding =
+    session && !isProjector && ended
+      ? endgameStandingForPlayer(session.you, session.players, session.scores)
+      : null;
   const playerCount = session?.players?.length ?? 0;
   const canStartGame = playerCount >= 3 && playerCount <= 10;
   const projectorVoteFit = isProjector && (photoVoting || photoDistribution);
@@ -1577,7 +1658,12 @@ export default function App() {
     session?.phase !== "round1_scores" &&
     session?.phase !== "round2_splash" &&
     session?.phase !== "final_results_transition" &&
+    session?.phase !== "play_again_transition" &&
     (session?.phase === "ended" || voteRevealVisible);
+
+  /** Text showdown vote breakdown: hide on player devices during round 1 (showdown); projector and game-over still use full reveal. */
+  const showPlayerTextVoteBreakdown =
+    showVoteDistribution && session?.phase !== "showdown";
   const isFinalShowdownSplash =
     session?.phase === "showdown" &&
     !!session?.showdown?.splashActive &&
@@ -2447,7 +2533,7 @@ export default function App() {
             </p>
           )}
 
-          {showVoteDistribution && session.lastResult?.voteBreakdown ? (
+          {showPlayerTextVoteBreakdown && session.lastResult?.voteBreakdown ? (
             <VoteDistribution
               breakdown={session.lastResult.voteBreakdown}
               mog={!!session.lastResult.mog}
@@ -2467,9 +2553,33 @@ export default function App() {
         </div>
       )}
 
+      {session && !isProjector && playAgainTransition && (
+        <div className="card">
+          <h2>Playing again</h2>
+          <p
+            className="muted"
+            style={{ marginTop: "0.75rem", marginBottom: 0, fontSize: "1rem" }}
+          >
+            Next round in {Math.max(0, answerTimeRemainingSec)}s…
+          </p>
+        </div>
+      )}
+
       {session && !isProjector && ended && (
         <div className="card">
           <h2>Game over</h2>
+          {endgamePlayerStanding ? (
+            <div style={{ marginTop: "1rem" }}>
+              <p style={{ margin: 0, fontSize: "1.05rem", fontWeight: 600 }}>
+                Your score: {endgamePlayerStanding.score.toFixed(1)} pts
+              </p>
+              <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.95rem" }}>
+                Your rank: {ordinalRank(endgamePlayerStanding.rank)} of{" "}
+                {endgamePlayerStanding.total}{" "}
+                {endgamePlayerStanding.total === 1 ? "player" : "players"}
+              </p>
+            </div>
+          ) : null}
           {session.winner?.players?.length ? (
             <div style={{ marginTop: "1rem" }}>
               <p className="muted" style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>
@@ -2492,7 +2602,7 @@ export default function App() {
           ) : session.winner?.names?.length ? (
             <p style={{ marginTop: "1rem" }}>{session.winner.names.join(", ")}</p>
           ) : null}
-          {showVoteDistribution && session.lastResult?.voteBreakdown ? (
+          {showPlayerTextVoteBreakdown && session.lastResult?.voteBreakdown ? (
             <VoteDistribution
               breakdown={session.lastResult.voteBreakdown}
               mog={!!session.lastResult.mog}
@@ -2500,6 +2610,46 @@ export default function App() {
               players={session.players ?? []}
             />
           ) : null}
+          {isHost ? (
+            <div
+              style={{
+                marginTop: "1.25rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.65rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={playAgain}
+                disabled={endgameBusy || !canStartGame}
+                style={{
+                  width: "100%",
+                  background: "linear-gradient(135deg, var(--accent), #c9a22e)",
+                  color: "#1a1408",
+                }}
+              >
+                {endgameBusy ? "Please wait…" : "Play Again"}
+              </button>
+              <button
+                type="button"
+                onClick={newGameFromEnd}
+                disabled={endgameBusy}
+                style={{
+                  width: "100%",
+                  background: "var(--surface)",
+                  color: "var(--text)",
+                  border: "1px solid var(--border)",
+                }}
+              >
+                New Game
+              </button>
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: "1.25rem", marginBottom: 0 }}>
+              Waiting for the host to start another game…
+            </p>
+          )}
         </div>
       )}
 
