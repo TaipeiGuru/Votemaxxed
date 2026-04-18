@@ -2,11 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import { PlayerElement } from "./PlayerElement.jsx";
 
-function getPlayer(session, playerId) {
-  if (!session?.players || !playerId) return null;
-  return session.players.find((p) => p.id === playerId) ?? null;
-}
-
 const SERVER =
   import.meta.env.VITE_SERVER_URL || "http://localhost:3001";
 
@@ -226,7 +221,7 @@ function useSocket() {
   return ref.current;
 }
 
-function MogOverlay({ payload, onDone, playSound = false, players = [] }) {
+function MogOverlay({ payload, onDone, playSound = false }) {
   const [pieces] = useState(() =>
     Array.from({ length: 48 }, (_, i) => ({
       id: i,
@@ -251,10 +246,6 @@ function MogOverlay({ payload, onDone, playSound = false, players = [] }) {
 
   if (!payload) return null;
 
-  const winnerPlayer =
-    payload.winningAuthorId &&
-    players.find((p) => p.id === payload.winningAuthorId);
-
   return (
     <div className="mog-overlay" aria-live="polite">
       <div className="mog-backdrop" />
@@ -272,21 +263,6 @@ function MogOverlay({ payload, onDone, playSound = false, players = [] }) {
       ))}
       <div className="mog-card">
         <p className="mog-title">MOGGED</p>
-        <p className="muted mog-sub">
-          Unanimous vote — saved to the hall of fame.
-        </p>
-        <p className="mog-sub mog-sub--winner">
-          {winnerPlayer ? (
-            <PlayerElement
-              name={winnerPlayer.name}
-              iconKey={winnerPlayer.iconKey}
-              variant="compact"
-            />
-          ) : (
-            <strong>{payload.winningAuthorName}</strong>
-          )}
-          <span className="mog-sub-answer">: “{payload.winningAnswer}”</span>
-        </p>
       </div>
     </div>
   );
@@ -677,6 +653,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
+  const finalResultsTransition = session?.phase === "final_results_transition";
   const round1Scores = session?.phase === "round1_scores";
   const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
@@ -711,7 +688,16 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         className={`projector-top${projectorHeaderMatchPlayer ? " projector-top--match-player" : ""}`}
       >
         <div className="projector-brand">
-          <p className="projector-kicker">Votemaxxed</p>
+          <div className="header-brand-row">
+            <img
+              src="/images/white_logo.png"
+              alt=""
+              className="header-brand-logo header-brand-logo--projector"
+              width={46}
+              height={46}
+            />
+            <p className="projector-kicker">Votemaxxed</p>
+          </div>
           <p className="muted projector-match-player-tagline">
             Are you a true votemaxxer? Use your creativity to avoid getting answermogged.
           </p>
@@ -736,9 +722,6 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
               <li key={p.id}>
                 <div className="projector-player-element-wrap">
                   <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
-                  {p.id === session.hostPlayerId ? (
-                    <span className="muted"> · host</span>
-                  ) : null}
                 </div>
               </li>
             ))}
@@ -829,7 +812,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
           <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
           <div className="projector-answering-grid">
             <section className="projector-status-col">
-              <h3 className="projector-status-heading ready">Uploaded</h3>
+              <h3 className="projector-status-heading ready">Ready</h3>
               <ul className="projector-name-list">
                 {photoRound?.uploadProgress?.done?.length ? (
                   photoRound.uploadProgress.done.map((p) => (
@@ -871,7 +854,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
           <p className="projector-photo-timer">Time left: {answerTimeRemainingSec}s</p>
           <div className="projector-answering-grid">
             <section className="projector-status-col">
-              <h3 className="projector-status-heading ready">Submitted</h3>
+              <h3 className="projector-status-heading ready">Ready</h3>
               <ul className="projector-name-list">
                 {photoRound?.captionProgress?.done?.length ? (
                   photoRound.captionProgress.done.map((p) => (
@@ -904,31 +887,21 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
 
       {photoVoteLoading && (
         <div className="card">
-          <h2>Let's see the point breakdown...</h2>
+          <h2>Get ready to vote...</h2>
         </div>
       )}
 
       {photoVoting && (
         <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
-          <p className="muted projector-ballot-complete-heading">Finished voting:</p>
-          <div
-            className="projector-ballot-name-chips"
-            aria-label="Players who submitted a full ballot"
+          <p
+            className="projector-photo-timer"
+            style={{
+              marginBottom: "clamp(0.25rem, 0.75vh, 0.6rem)",
+              color: answerTimeRemainingSec <= 10 ? "var(--danger)" : "var(--accent)",
+            }}
           >
-            {(photoRound?.voteProgress?.ballotComplete?.length ?? 0) === 0 ? (
-              <span className="muted">None yet</span>
-            ) : (
-              photoRound.voteProgress.ballotComplete.map((row) => (
-                <PlayerElement
-                  key={row.id}
-                  name={row.name}
-                  iconKey={row.iconKey}
-                  variant="compact"
-                  className="projector-ballot-player-chip"
-                />
-              ))
-            )}
-          </div>
+            Time left: {answerTimeRemainingSec}s
+          </p>
           <div
             className="projector-photo-grid projector-photo-grid--vote-fit"
             style={{
@@ -959,7 +932,6 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
 
       {photoDistribution && (
         <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
-          <h2 className="projector-card-title projector-card-title--vote-fit">Photo pairing rankings</h2>
           <div
             className="projector-photo-grid projector-photo-grid--vote-fit"
             style={{
@@ -987,6 +959,17 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       {photoEndTransition && (
         <div className="projector-card projector-card--surface projector-photo-round">
           <h2>Who's the ultimate votemaxxer?</h2>
+        </div>
+      )}
+
+      {finalResultsTransition && (
+        <div className="projector-card projector-card--surface projector-photo-round">
+          <h2 className="projector-card-title" style={{ textAlign: "center", marginBottom: "0.5rem" }}>
+            Final results
+          </h2>
+          <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
+            The scores are coming up…
+          </p>
         </div>
       )}
 
@@ -1062,7 +1045,7 @@ function BothFoldOverlay({ payload, onDone }) {
     if (!payload) return undefined;
     setCrossedOut(false);
     const now = Date.now();
-    const crossDelay = Math.max(0, (payload.startsAt + 5000) - now);
+    const crossDelay = Math.max(0, (payload.startsAt + 2000) - now);
     const doneDelay = Math.max(0, payload.endsAt - now);
     const crossTimer = setTimeout(() => setCrossedOut(true), crossDelay);
     const doneTimer = setTimeout(onDone, doneDelay);
@@ -1095,7 +1078,7 @@ function BothFoldOverlay({ payload, onDone }) {
               }`}
             >
               <span className="both-fold-name-inner">
-                <PlayerElement name={player.name} iconKey={player.iconKey} variant="compact" />
+                {player.name}
               </span>
               <span className="both-fold-subhuman">subhuman</span>
             </p>
@@ -1211,7 +1194,8 @@ export default function App() {
     if (
       session?.phase === "ended" ||
       session?.phase === "round1_scores" ||
-      session?.phase === "round2_splash"
+      session?.phase === "round2_splash" ||
+      session?.phase === "final_results_transition"
     ) {
       setVoteRevealVisible(session?.phase === "ended");
       pendingVoteRevealRef.current = null;
@@ -1284,7 +1268,7 @@ export default function App() {
         ],
         foldedAuthorIds,
         startsAt: Number(sd.bothFoldStartsAt || Date.now() + 1500),
-        endsAt: Number(sd.bothFoldEndsAt || Date.now() + 10500),
+        endsAt: Number(sd.bothFoldEndsAt || Date.now() + 10500) - 2000,
       });
       bothFoldStartTimerRef.current = null;
     }, Math.max(0, Number(sd.bothFoldStartsAt || (Date.now() + 1500)) - Date.now()));
@@ -1470,6 +1454,8 @@ export default function App() {
         ? session?.photoRound?.uploadEndsAt
         : session?.phase === "photo_captioning"
         ? session?.photoRound?.captionEndsAt
+        : session?.phase === "photo_voting"
+        ? session?.photoRound?.voteEndsAt
         : null;
     if (!timedPhaseEndsAt) {
       setAnswerTimeLeftMs(0);
@@ -1486,6 +1472,7 @@ export default function App() {
     session?.answeringEndsAt,
     session?.photoRound?.uploadEndsAt,
     session?.photoRound?.captionEndsAt,
+    session?.photoRound?.voteEndsAt,
   ]);
 
   useEffect(() => {
@@ -1546,6 +1533,7 @@ export default function App() {
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
   const photoEndTransition = session?.phase === "photo_end_transition";
+  const finalResultsTransition = session?.phase === "final_results_transition";
   const round1Scores = session?.phase === "round1_scores";
   const round2Splash = session?.phase === "round2_splash";
   const ended = session?.phase === "ended";
@@ -1560,6 +1548,7 @@ export default function App() {
     photoVoting ||
     photoDistributionLoading ||
     photoEndTransition ||
+    finalResultsTransition ||
     round1Scores ||
     round2Splash ||
     ended;
@@ -1587,6 +1576,7 @@ export default function App() {
     session?.lastResult?.voteBreakdown &&
     session?.phase !== "round1_scores" &&
     session?.phase !== "round2_splash" &&
+    session?.phase !== "final_results_transition" &&
     (session?.phase === "ended" || voteRevealVisible);
   const isFinalShowdownSplash =
     session?.phase === "showdown" &&
@@ -1617,9 +1607,24 @@ export default function App() {
     >
       {!isProjector && (
         <header style={{ marginBottom: "1.75rem" }}>
-          <h1 style={{ fontSize: "2.35rem", letterSpacing: "-0.02em" }}>
-            Votemaxxed
-          </h1>
+          <div className="header-brand-row" style={{ marginBottom: "0.35rem" }}>
+            <img
+              src="/images/white_logo.png"
+              alt=""
+              className="header-brand-logo header-brand-logo--player"
+              width={40}
+              height={40}
+            />
+            <h1
+              style={{
+                margin: 0,
+                fontSize: "2.35rem",
+                letterSpacing: "-0.02em",
+              }}
+            >
+              Votemaxxed
+            </h1>
+          </div>
           <p className="muted" style={{ margin: 0, fontSize: "0.95rem" }}>
             Are you a true votemaxxer? Use your creativity to avoid getting answermogged.
           </p>
@@ -1830,11 +1835,6 @@ export default function App() {
               <li key={p.id} style={{ marginBottom: "0.5rem" }}>
                 <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.35rem" }}>
                   <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
-                  {p.id === session.hostPlayerId ? (
-                    <span className="muted" style={{ fontSize: "0.85rem" }}>
-                      — host
-                    </span>
-                  ) : null}
                 </div>
               </li>
             ))}
@@ -2283,21 +2283,6 @@ export default function App() {
         <div className="card">
           <h2>Give a funny caption</h2>
           <p className="muted">Time left: {answerTimeRemainingSec}s</p>
-          {photoRound?.myAssignedPhoto?.uploaderId ? (
-            <div style={{ marginTop: "0.5rem" }}>
-              <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.85rem" }}>
-                Photo by
-              </p>
-              {(() => {
-                const up = getPlayer(session, photoRound.myAssignedPhoto.uploaderId);
-                return up ? (
-                  <PlayerElement name={up.name} iconKey={up.iconKey} variant="compact" />
-                ) : (
-                  <span className="muted">{photoRound.myAssignedPhoto.uploaderName ?? "?"}</span>
-                );
-              })()}
-            </div>
-          ) : null}
           {photoRound?.myAssignedPhoto?.photoDataUrl ? (
             <img
               src={photoRound.myAssignedPhoto.photoDataUrl}
@@ -2327,7 +2312,7 @@ export default function App() {
 
       {session && !isProjector && photoVoteLoading && (
         <div className="card">
-          <h2>Let's see the point breakdown...</h2>
+          <h2>Get ready to vote...</h2>
         </div>
       )}
 
@@ -2470,6 +2455,15 @@ export default function App() {
               players={session.players ?? []}
             />
           ) : null}
+        </div>
+      )}
+
+      {session && !isProjector && finalResultsTransition && (
+        <div className="card">
+          <h2>Final results</h2>
+          <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+            The scores are coming up…
+          </p>
         </div>
       )}
 

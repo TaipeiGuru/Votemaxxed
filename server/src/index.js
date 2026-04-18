@@ -30,6 +30,8 @@ const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
 const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
 const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
 const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
+/** Max time round-2 rank voting stays open; early finish when all ballots are complete. */
+const PHOTO_VOTING_DURATION_MS = 30000;
 const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
 /** How long the projector shows the round-2 vote breakdown (`photo_distribution`) before the end transition. */
 const PHOTO_DISTRIBUTION_VISIBLE_MS = 5000;
@@ -38,6 +40,8 @@ const ROUND1_LEADERBOARD_MS = 15000;
 /** Full-screen style pause before round 2 photo uploads begin. */
 const ROUND2_SPLASH_MS = 3000;
 const PHOTO_END_TRANSITION_MS = 2500;
+/** Splash before the end-game scoreboard (after photo round wrap-up). */
+const FINAL_RESULTS_TRANSITION_MS = 4000;
 const PHOTO_VOTE_POINTS = {
   third: 50,
   second: 100,
@@ -248,20 +252,26 @@ function sessionSnapshot(sess, forPlayerId) {
     };
   }
 
+  if (sess.phase === "final_results_transition") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
+    };
+  }
+
   if (isPhotoRoundPhase(sess.phase)) {
     const isProjectorViewer = forPlayerId === PROJECTOR_SENTINEL_ID;
     const pr = sess.photoRound || {};
     const myVoteState = pr.rankedVotes?.[forPlayerId] || {};
     const myAssignedUploaderId = pr.captionAssignments?.[forPlayerId] ?? null;
-    const uploaderPlayer = sess.players.find((p) => p.id === myAssignedUploaderId) || null;
     const myCaptionText = pr.captions?.[forPlayerId] ?? "";
     const myPhotoDataUrl = pr.uploads?.[forPlayerId] ?? "";
     const pairingsPublic = (pr.pairings || []).map((p) => ({
       number: p.number,
-      uploaderId: p.uploaderId,
-      captionerId: p.captionerId,
-      uploaderName: sess.players.find((pl) => pl.id === p.uploaderId)?.name ?? "?",
-      captionerName: sess.players.find((pl) => pl.id === p.captionerId)?.name ?? "?",
       photoDataUrl: p.photoDataUrl || "",
       captionText: p.captionText || "",
       points: Number(p.points || 0),
@@ -279,6 +289,7 @@ function sessionSnapshot(sess, forPlayerId) {
         answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
         uploadEndsAt: pr.uploadEndsAt ?? null,
         captionEndsAt: pr.captionEndsAt ?? null,
+        voteEndsAt: pr.voteEndsAt ?? null,
         uploadProgress: isProjectorViewer ? computePhotoUploadProgress(sess) : undefined,
         captionProgress: isProjectorViewer ? computePhotoCaptionProgress(sess) : undefined,
         myPhotoSubmitted: (pr.uploadSubmittedBy || []).includes(forPlayerId),
@@ -291,8 +302,6 @@ function sessionSnapshot(sess, forPlayerId) {
           sess.phase === "photo_distribution" ||
           sess.phase === "photo_end_transition"
             ? {
-                uploaderId: myAssignedUploaderId,
-                uploaderName: uploaderPlayer?.name ?? null,
                 photoDataUrl: pr.uploads?.[myAssignedUploaderId] || "",
               }
             : null,
@@ -304,16 +313,6 @@ function sessionSnapshot(sess, forPlayerId) {
           second: myVoteState.second ?? null,
           first: myVoteState.first ?? null,
         },
-        voteProgress: isProjectorViewer
-          ? {
-              ballotComplete: sess.players
-                .filter((p) => {
-                  const ballot = pr.rankedVotes?.[p.id] || {};
-                  return !!(ballot.third && ballot.second && ballot.first);
-                })
-                .map((p) => ({ id: p.id, name: p.name, iconKey: p.iconKey })),
-            }
-          : undefined,
         pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
         distribution:
           isProjectorViewer && sess.phase === "photo_distribution"
@@ -589,6 +588,14 @@ function clearRound2SplashTimer(sess) {
   }
 }
 
+function clearPhotoVoteTimer(sess) {
+  if (sess._photoVoteTimer) {
+    clearTimeout(sess._photoVoteTimer);
+    sess._photoVoteTimer = null;
+  }
+  if (sess.photoRound) sess.photoRound.voteEndsAt = null;
+}
+
 function clearPhotoRoundTimers(sess) {
   if (sess._photoUploadTimer) {
     clearTimeout(sess._photoUploadTimer);
@@ -602,6 +609,7 @@ function clearPhotoRoundTimers(sess) {
     clearTimeout(sess._photoCaptionTimer);
     sess._photoCaptionTimer = null;
   }
+  clearPhotoVoteTimer(sess);
   if (sess._photoVoteLoadingTimer) {
     clearTimeout(sess._photoVoteLoadingTimer);
     sess._photoVoteLoadingTimer = null;
@@ -617,6 +625,10 @@ function clearPhotoRoundTimers(sess) {
   if (sess._photoFinalEndTimer) {
     clearTimeout(sess._photoFinalEndTimer);
     sess._photoFinalEndTimer = null;
+  }
+  if (sess._finalResultsTransitionTimer) {
+    clearTimeout(sess._finalResultsTransitionTimer);
+    sess._finalResultsTransitionTimer = null;
   }
 }
 
@@ -665,6 +677,7 @@ function initPhotoRoundState(sess) {
     captions: {},
     captionSubmittedBy: [],
     captionEndsAt: null,
+    voteEndsAt: null,
     pairings,
     rankedVotes: {},
   };
@@ -705,11 +718,25 @@ function startPhotoCaptioning(sess) {
 
 function startPhotoVoting(sess) {
   if (sess.phase !== "photo_vote_loading") return;
+  const pr = sess.photoRound;
+  if (!pr) return;
+  clearPhotoVoteTimer(sess);
   sess.phase = "photo_voting";
+  const code = sess.code;
+  const ms = PHOTO_VOTING_DURATION_MS;
+  pr.voteEndsAt = Date.now() + ms;
+  sess._photoVoteTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_voting") return;
+    s._photoVoteTimer = null;
+    finalizePhotoVotingAndScore(s);
+  }, ms);
   broadcastSession(sess);
 }
 
 function finalizePhotoVotingAndScore(sess) {
+  clearPhotoVoteTimer(sess);
+  if (sess.phase !== "photo_voting") return;
   const pr = sess.photoRound;
   if (!pr) return;
   const pointsByNumber = new Map(pr.pairings.map((p) => [p.number, 0]));
@@ -746,9 +773,16 @@ function finalizePhotoVotingAndScore(sess) {
         const s3 = sessions.get(code);
         if (!s3 || s3.phase !== "photo_end_transition") return;
         s3._photoFinalEndTimer = null;
-        s3.phase = "ended";
-        setWinnerFromScores(s3);
+        s3.phase = "final_results_transition";
         broadcastSession(s3);
+        s3._finalResultsTransitionTimer = setTimeout(() => {
+          const s4 = sessions.get(code);
+          if (!s4 || s4.phase !== "final_results_transition") return;
+          s4._finalResultsTransitionTimer = null;
+          s4.phase = "ended";
+          setWinnerFromScores(s4);
+          broadcastSession(s4);
+        }, FINAL_RESULTS_TRANSITION_MS);
       }, PHOTO_END_TRANSITION_MS);
     }, PHOTO_DISTRIBUTION_VISIBLE_MS);
   }, PHOTO_DISTRIBUTION_REVIEW_MS);

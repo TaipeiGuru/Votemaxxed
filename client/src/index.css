@@ -179,8 +179,8 @@ label {
 }
 
 .projector-score-drop-row .player-element {
-  flex: 1;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: fit-content;
 }
 
 /* Mog overlay */
@@ -561,6 +561,29 @@ label {
   min-width: 0;
 }
 
+.header-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.header-brand-logo {
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.header-brand-logo--player {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.header-brand-logo--projector {
+  width: clamp(2rem, 4.2vw, 2.85rem);
+  height: clamp(2rem, 4.2vw, 2.85rem);
+}
+
 .projector-kicker {
   margin: 0;
   font-family: var(--font-display);
@@ -635,9 +658,18 @@ label {
 
 .projector-player-list {
   margin: 0;
-  padding-left: 1.35rem;
+  padding-left: 0;
+  list-style: none;
   font-size: clamp(1.1rem, 2vw, 1.45rem);
   line-height: 1.6;
+}
+
+.projector-player-list li {
+  margin-bottom: 0.7rem;
+}
+
+.projector-player-list li:last-child {
+  margin-bottom: 0;
 }
 
 .projector-player-name {
@@ -680,7 +712,8 @@ label {
 
 .projector-name-list {
   margin: 0;
-  padding-left: 1.25rem;
+  padding-left: 0;
+  list-style: none;
   font-size: clamp(1.2rem, 2.4vw, 1.75rem);
   line-height: 1.65;
 }
@@ -898,23 +931,6 @@ label {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.layout--projector-vote-fit .projector-ballot-complete-heading {
-  margin: 0 0 0.3rem;
-  font-size: clamp(0.76rem, 1.1vh, 0.92rem);
-}
-
-.layout--projector-vote-fit .projector-ballot-name-chips {
-  margin-bottom: clamp(0.3rem, 0.8vh, 0.6rem);
-  gap: clamp(0.2rem, 0.5vh, 0.4rem) clamp(0.3rem, 0.7vh, 0.55rem);
-  max-height: clamp(1.2rem, 3vh, 2.4rem);
-  overflow: hidden;
-}
-
-.layout--projector-vote-fit .projector-ballot-name-chip {
-  padding: clamp(0.15rem, 0.35vh, 0.25rem) clamp(0.4rem, 0.9vh, 0.65rem);
-  font-size: clamp(0.68rem, 0.95vh, 0.85rem);
 }
 
 .layout--projector-vote-fit .projector-card-title--vote-fit {
@@ -1181,32 +1197,6 @@ label {
 .photo-crop-primary {
   background: linear-gradient(135deg, var(--accent), #c9a22e);
   color: #1a1408;
-}
-
-/* Projector — photo round full-ballot progress (names, wrap left → right) */
-.projector-ballot-complete-heading {
-  margin: 0 0 0.45rem;
-  font-size: clamp(0.85rem, 1.4vw, 1rem);
-}
-
-.projector-ballot-name-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
-  align-items: center;
-  justify-content: flex-start;
-  margin-bottom: 1rem;
-}
-
-.projector-ballot-name-chip {
-  display: inline-block;
-  padding: 0.35rem 0.85rem;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(139, 149, 168, 0.1);
-  font-size: clamp(0.92rem, 1.5vw, 1.12rem);
-  white-space: nowrap;
-  color: var(--text);
 }
 
 /* Photo round — independent rank voting (3rd / 2nd / 1st) */
