@@ -273,12 +273,14 @@ function projectorVoterChipEntries(voters) {
   if (typeof voters[0] === "string") {
     return voters.map((name, i) => ({
       key: `${name}-${i}`,
+      id: undefined,
       name,
       iconKey: undefined,
     }));
   }
   return voters.map((v) => ({
     key: v.id,
+    id: v.id,
     name: v.name,
     iconKey: v.iconKey,
   }));
@@ -321,6 +323,7 @@ function ProjectorDualAnswerColumns({
   answerB,
   votersForA,
   votersForB,
+  hostPlayerId,
   rowClassName = "",
 }) {
   const left = projectorVoterChipEntries(votersForA);
@@ -346,6 +349,8 @@ function ProjectorDualAnswerColumns({
                 <PlayerElement
                   name={authorAPlayer.name}
                   iconKey={authorAPlayer.iconKey}
+                  playerId={authorAPlayer.id}
+                  hostPlayerId={hostPlayerId}
                   variant="compact"
                 />
               ) : (
@@ -364,6 +369,8 @@ function ProjectorDualAnswerColumns({
               key={v.key}
               name={v.name}
               iconKey={v.iconKey}
+              playerId={v.id}
+              hostPlayerId={hostPlayerId}
               variant="compact"
             />
           ))}
@@ -384,6 +391,8 @@ function ProjectorDualAnswerColumns({
                 <PlayerElement
                   name={authorBPlayer.name}
                   iconKey={authorBPlayer.iconKey}
+                  playerId={authorBPlayer.id}
+                  hostPlayerId={hostPlayerId}
                   variant="compact"
                 />
               ) : (
@@ -402,6 +411,8 @@ function ProjectorDualAnswerColumns({
               key={v.key}
               name={v.name}
               iconKey={v.iconKey}
+              playerId={v.id}
+              hostPlayerId={hostPlayerId}
               variant="compact"
             />
           ))}
@@ -411,7 +422,7 @@ function ProjectorDualAnswerColumns({
   );
 }
 
-function VoteDistribution({ breakdown, mog, projector, players = [] }) {
+function VoteDistribution({ breakdown, mog, projector, players = [], hostPlayerId }) {
   if (!breakdown) return null;
   const {
     promptText,
@@ -439,6 +450,8 @@ function VoteDistribution({ breakdown, mog, projector, players = [] }) {
             key={v.key}
             name={v.name}
             iconKey={v.iconKey}
+            playerId={v.id}
+            hostPlayerId={hostPlayerId}
             variant="compact"
           />
         ))}
@@ -497,6 +510,7 @@ function VoteDistribution({ breakdown, mog, projector, players = [] }) {
           answerB={String(answerBText ?? "")}
           votersForA={votersForA ?? []}
           votersForB={votersForB ?? []}
+          hostPlayerId={hostPlayerId}
           rowClassName="vote-distribution-projector-row"
         />
       ) : (
@@ -520,6 +534,8 @@ function VoteDistribution({ breakdown, mog, projector, players = [] }) {
                 <PlayerElement
                   name={authorAPlayer.name}
                   iconKey={authorAPlayer.iconKey}
+                  playerId={authorAPlayer.id}
+                  hostPlayerId={hostPlayerId}
                   variant="compact"
                 />
               ) : (
@@ -555,6 +571,8 @@ function VoteDistribution({ breakdown, mog, projector, players = [] }) {
                 <PlayerElement
                   name={authorBPlayer.name}
                   iconKey={authorBPlayer.iconKey}
+                  playerId={authorBPlayer.id}
+                  hostPlayerId={hostPlayerId}
                   variant="compact"
                 />
               ) : (
@@ -583,7 +601,7 @@ function VoteDistribution({ breakdown, mog, projector, players = [] }) {
   );
 }
 
-function ProjectorScoreDropBoard({ players, scores, phaseKey }) {
+function ProjectorScoreDropBoard({ players, scores, phaseKey, hostPlayerId }) {
   const rows = useMemo(() => {
     const scoreRows = (players ?? []).map((p) => ({
       id: p.id,
@@ -664,7 +682,13 @@ function ProjectorScoreDropBoard({ players, scores, phaseKey }) {
             }`}
             style={{ top: `${topById.get(row.id) ?? 0}px` }}
           >
-            <PlayerElement name={row.name} iconKey={row.iconKey} variant="compact" />
+            <PlayerElement
+              name={row.name}
+              iconKey={row.iconKey}
+              playerId={row.id}
+              hostPlayerId={hostPlayerId}
+              variant="compact"
+            />
             <span className="projector-score-drop-value">{row.score.toFixed(1)}</span>
           </div>
         ))}
@@ -685,7 +709,6 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const photoVoting = session?.phase === "photo_voting";
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
-  const photoEndTransition = session?.phase === "photo_end_transition";
   const finalResultsTransition = session?.phase === "final_results_transition";
   const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
@@ -713,8 +736,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const breakdownVisible =
     !!session?.lastResult?.voteBreakdown && showVoteDistribution;
 
-  const projectorHeaderMatchPlayer =
-    photoDistributionLoading || photoEndTransition;
+  const projectorHeaderMatchPlayer = photoDistributionLoading;
 
   return (
     <div className="projector-root">
@@ -755,7 +777,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
             {session.players?.map((p) => (
               <li key={p.id}>
                 <div className="projector-player-element-wrap">
-                  <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                  <PlayerElement
+                    name={p.name}
+                    iconKey={p.iconKey}
+                    playerId={p.id}
+                    hostPlayerId={session.hostPlayerId}
+                    variant="compact"
+                  />
                 </div>
               </li>
             ))}
@@ -781,7 +809,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {progress.done?.length ? (
                   progress.done.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -795,7 +829,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {progress.waiting?.length ? (
                   progress.waiting.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -810,7 +850,11 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
-      {showdown && sd && !sd.splashActive && (
+      {showdown &&
+        sd &&
+        !sd.splashActive &&
+        !(sd.foldedAuthorIds?.length > 0) &&
+        !sd.bothFolded && (
         <div className="projector-card projector-showdown">
           <h2 className="projector-prompt">{sd.promptText}</h2>
           {breakdownVisible && session.lastResult?.mog ? (
@@ -838,6 +882,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
             answerB={sd.answerB}
             votersForA={sd.votersForA ?? []}
             votersForB={sd.votersForB ?? []}
+            hostPlayerId={session.hostPlayerId}
           />
         </div>
       )}
@@ -852,7 +897,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {photoRound?.uploadProgress?.done?.length ? (
                   photoRound.uploadProgress.done.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -866,7 +917,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {photoRound?.uploadProgress?.waiting?.length ? (
                   photoRound.uploadProgress.waiting.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -894,7 +951,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {photoRound?.captionProgress?.done?.length ? (
                   photoRound.captionProgress.done.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -908,7 +971,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
                 {photoRound?.captionProgress?.waiting?.length ? (
                   photoRound.captionProgress.waiting.map((p) => (
                     <li key={p.id}>
-                      <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                      <PlayerElement
+                        name={p.name}
+                        iconKey={p.iconKey}
+                        playerId={p.id}
+                        hostPlayerId={session.hostPlayerId}
+                        variant="compact"
+                      />
                     </li>
                   ))
                 ) : (
@@ -991,19 +1060,13 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
-      {photoEndTransition && (
-        <div className="projector-card projector-card--surface projector-photo-round">
-          <h2>Who's the ultimate votemaxxer?</h2>
-        </div>
-      )}
-
       {finalResultsTransition && (
         <div className="projector-card projector-card--surface projector-photo-round">
           <h2 className="projector-card-title" style={{ textAlign: "center", marginBottom: "0.5rem" }}>
             Final results
           </h2>
           <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
-            The scores are coming up…
+            Who will be the ultimate votemaxxer?
           </p>
         </div>
       )}
@@ -1011,11 +1074,8 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
       {playAgainTransition && (
         <div className="projector-card projector-card--surface projector-photo-round">
           <h2 className="projector-card-title" style={{ textAlign: "center", marginBottom: "0.5rem" }}>
-            Playing again
+            Round 1
           </h2>
-          <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
-            Next round starting…
-          </p>
         </div>
       )}
 
@@ -1025,6 +1085,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
             players={session.players}
             scores={session.scores}
             phaseKey={`${session.code}-${session.phase}`}
+            hostPlayerId={session.hostPlayerId}
           />
         </div>
       )}
@@ -1066,15 +1127,6 @@ function ChudOverlay({ payload, onDone }) {
       <div className="chud-backdrop" />
       <div className="chud-card">
         <p className="chud-title">CHUD</p>
-        <p className="chud-tease">{payload.tease}</p>
-        <p className="muted chud-sub">
-          Your answer got <strong>0 votes</strong>
-          {payload.answerText ? (
-            <>
-              : “{payload.answerText}”
-            </>
-          ) : null}
-        </p>
       </div>
     </div>
   );
@@ -1163,6 +1215,7 @@ export default function App() {
   const altRejectTimerRef = useRef(null);
   const latestSessionRef = useRef(null);
   const latestAnswersRef = useRef({});
+  const answeringInitKeyRef = useRef(null);
   const bothFoldShownQueueRef = useRef(null);
   const bothFoldStartTimerRef = useRef(null);
 
@@ -1495,14 +1548,20 @@ export default function App() {
   const isHost = session?.you && session?.hostPlayerId === session?.you;
 
   useEffect(() => {
-    if (session?.phase !== "answering") return;
-    const mine = {};
-    for (const p of myPrompts) {
-      const k = String(p.index);
-      mine[k] = session.answersMine?.[k] ?? "";
+    if (session?.phase !== "answering") {
+      answeringInitKeyRef.current = null;
+      return;
     }
-    setAnswers((prev) => ({ ...mine, ...prev }));
-  }, [session?.phase, session?.answersMine, myPrompts]);
+    const promptKey = myPrompts.map((p) => String(p.index)).join("|");
+    const answeringKey = `${session?.code ?? ""}:${session?.answeringEndsAt ?? ""}:${promptKey}`;
+    if (answeringInitKeyRef.current === answeringKey) return;
+    answeringInitKeyRef.current = answeringKey;
+    const emptyAnswers = {};
+    for (const p of myPrompts) {
+      emptyAnswers[String(p.index)] = "";
+    }
+    setAnswers(emptyAnswers);
+  }, [session?.phase, session?.code, session?.answeringEndsAt, myPrompts]);
 
   useEffect(() => {
     latestAnswersRef.current = answers;
@@ -1607,7 +1666,6 @@ export default function App() {
   const photoVoting = session?.phase === "photo_voting";
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
-  const photoEndTransition = session?.phase === "photo_end_transition";
   const finalResultsTransition = session?.phase === "final_results_transition";
   const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
@@ -1623,7 +1681,6 @@ export default function App() {
     photoVoteLoading ||
     photoVoting ||
     photoDistributionLoading ||
-    photoEndTransition ||
     finalResultsTransition ||
     playAgainTransition ||
     round1Scores ||
@@ -1661,9 +1718,17 @@ export default function App() {
     session?.phase !== "play_again_transition" &&
     (session?.phase === "ended" || voteRevealVisible);
 
-  /** Text showdown vote breakdown: hide on player devices during round 1 (showdown); projector and game-over still use full reveal. */
+  /** Text vote breakdown on handsets: not during round 1 showdown, and not on the game-over screen. */
   const showPlayerTextVoteBreakdown =
-    showVoteDistribution && session?.phase !== "showdown";
+    showVoteDistribution &&
+    session?.phase !== "showdown" &&
+    session?.phase !== "ended";
+  const skipShowdownVotingScreen =
+    session?.phase === "showdown" &&
+    !!session?.showdown &&
+    !session?.showdown?.splashActive &&
+    (session?.showdown?.foldedAuthorIds?.length > 0 || session?.showdown?.bothFolded);
+
   const isFinalShowdownSplash =
     session?.phase === "showdown" &&
     !!session?.showdown?.splashActive &&
@@ -1738,8 +1803,8 @@ export default function App() {
         />
       )}
       <NextVoteSplash
-        active={!!session?.showdown?.splashActive}
-        text={nextVoteSplashText}
+        active={!!session?.showdown?.splashActive || skipShowdownVotingScreen}
+        text={skipShowdownVotingScreen ? "Loading next matchup..." : nextVoteSplashText}
       />
       <NextVoteSplash
         active={session?.phase === "round2_splash"}
@@ -1920,7 +1985,13 @@ export default function App() {
             {session.players?.map((p) => (
               <li key={p.id} style={{ marginBottom: "0.5rem" }}>
                 <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.35rem" }}>
-                  <PlayerElement name={p.name} iconKey={p.iconKey} variant="compact" />
+                  <PlayerElement
+                    name={p.name}
+                    iconKey={p.iconKey}
+                    playerId={p.id}
+                    hostPlayerId={session.hostPlayerId}
+                    variant="compact"
+                  />
                 </div>
               </li>
             ))}
@@ -2445,12 +2516,6 @@ export default function App() {
         </div>
       )}
 
-      {session && !isProjector && photoEndTransition && (
-        <div className="card">
-          <h2>Who's the ultimate votemaxxer?</h2>
-        </div>
-      )}
-
       {session &&
         !isProjector &&
         !knownPlayerPhase &&
@@ -2465,7 +2530,9 @@ export default function App() {
         !isProjector &&
         showdown &&
         session.showdown &&
-        !session.showdown.splashActive && (
+        !session.showdown.splashActive &&
+        !(session.showdown.foldedAuthorIds?.length > 0) &&
+        !session.showdown.bothFolded && (
         <div className="card">
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
@@ -2539,6 +2606,7 @@ export default function App() {
               mog={!!session.lastResult.mog}
               projector={false}
               players={session.players ?? []}
+              hostPlayerId={session.hostPlayerId}
             />
           ) : null}
         </div>
@@ -2548,7 +2616,7 @@ export default function App() {
         <div className="card">
           <h2>Final results</h2>
           <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
-            The scores are coming up…
+            Who will be the ultimate votemaxxer?
           </p>
         </div>
       )}
@@ -2583,7 +2651,7 @@ export default function App() {
           {session.winner?.players?.length ? (
             <div style={{ marginTop: "1rem" }}>
               <p className="muted" style={{ marginBottom: "0.5rem", fontSize: "0.9rem" }}>
-                Top score
+                Ultimate framemogger:
               </p>
               <div className="player-element-list">
                 {session.winner.players.map((p) => (
@@ -2591,6 +2659,8 @@ export default function App() {
                     key={p.id}
                     name={p.name}
                     iconKey={p.iconKey}
+                    playerId={p.id}
+                    hostPlayerId={session.hostPlayerId}
                     variant="compact"
                   />
                 ))}
@@ -2608,6 +2678,7 @@ export default function App() {
               mog={!!session.lastResult.mog}
               projector={false}
               players={session.players ?? []}
+              hostPlayerId={session.hostPlayerId}
             />
           ) : null}
           {isHost ? (

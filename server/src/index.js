@@ -178,8 +178,7 @@ function isPhotoRoundPhase(phase) {
     phase === "photo_vote_loading" ||
     phase === "photo_distribution_loading" ||
     phase === "photo_voting" ||
-    phase === "photo_distribution" ||
-    phase === "photo_end_transition"
+    phase === "photo_distribution"
   );
 }
 
@@ -313,8 +312,7 @@ function sessionSnapshot(sess, forPlayerId) {
           sess.phase === "photo_vote_loading" ||
           sess.phase === "photo_distribution_loading" ||
           sess.phase === "photo_voting" ||
-          sess.phase === "photo_distribution" ||
-          sess.phase === "photo_end_transition"
+          sess.phase === "photo_distribution"
             ? {
                 photoDataUrl: pr.uploads?.[myAssignedUploaderId] || "",
               }
@@ -875,24 +873,17 @@ function finalizePhotoVotingAndScore(sess) {
       const s2 = sessions.get(code);
       if (!s2 || s2.phase !== "photo_distribution") return;
       s2._photoEndTransitionTimer = null;
-      s2.phase = "photo_end_transition";
+      s2.phase = "final_results_transition";
       broadcastSession(s2);
-      s2._photoFinalEndTimer = setTimeout(() => {
-        const s3 = sessions.get(code);
-        if (!s3 || s3.phase !== "photo_end_transition") return;
-        s3._photoFinalEndTimer = null;
-        s3.phase = "final_results_transition";
-        broadcastSession(s3);
-        s3._finalResultsTransitionTimer = setTimeout(() => {
-          const s4 = sessions.get(code);
-          if (!s4 || s4.phase !== "final_results_transition") return;
-          s4._finalResultsTransitionTimer = null;
-          s4.phase = "ended";
-          setWinnerFromScores(s4);
-          broadcastSession(s4);
-        }, FINAL_RESULTS_TRANSITION_MS);
-      }, PHOTO_END_TRANSITION_MS);
-    }, PHOTO_DISTRIBUTION_VISIBLE_MS);
+      s2._finalResultsTransitionTimer = setTimeout(() => {
+        const s4 = sessions.get(code);
+        if (!s4 || s4.phase !== "final_results_transition") return;
+        s4._finalResultsTransitionTimer = null;
+        s4.phase = "ended";
+        setWinnerFromScores(s4);
+        broadcastSession(s4);
+      }, FINAL_RESULTS_TRANSITION_MS);
+    }, PHOTO_DISTRIBUTION_VISIBLE_MS + PHOTO_END_TRANSITION_MS);
   }, PHOTO_DISTRIBUTION_REVIEW_MS);
 }
 
