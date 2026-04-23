@@ -30,15 +30,17 @@ const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
 const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
 const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
 const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
-/** Max time round-2 rank voting stays open; early finish when all ballots are complete. */
+/** Max time photo-round rank voting stays open; early finish when all ballots are complete. */
 const PHOTO_VOTING_DURATION_MS = 30000;
 const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
-/** How long the projector shows each round-2 pairing in `photo_distribution`. */
+/** How long the projector shows each pairing in `photo_distribution`. */
 const PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS = 5000;
-/** Point leaderboard after round 1 (before photo round); tuned for score-drop animation (~1300ms per score group). */
+/** Mid-game scoreboard duration (after text round 1 and after doubled text round 2). */
 const ROUND1_LEADERBOARD_MS = 15000;
-/** Full-screen style pause before round 2 photo uploads begin. */
-const ROUND2_SPLASH_MS = 3000;
+/** Splash after round 1 leaderboard, before round 2 answering (double points). */
+const ROUND2_TEXT_SPLASH_MS = 3000;
+/** Full-screen pause before photo uploads (after text rounds). */
+const PHOTO_ROUND_SPLASH_MS = 3000;
 const PHOTO_END_TRANSITION_MS = 2500;
 /** Splash before the end-game scoreboard (after photo round wrap-up). */
 const FINAL_RESULTS_TRANSITION_MS = 4000;
@@ -51,6 +53,11 @@ const PHOTO_VOTE_POINTS = {
 };
 const ROUND1_FORFEIT_WIN_POINTS = 50;
 const ROUND1_MOG_BONUS_POINTS = 50;
+
+/** Second text round doubles showdown-derived points (vote split, MOG, forfeit). */
+function showdownPointMultiplier(sess) {
+  return sess?.textRoundNumber === 2 ? 2 : 1;
+}
 const PHOTO_VOTE_STAGE_ORDER = ["third", "second", "first"];
 const MAX_PHOTO_DATA_URL_LEN = 6_000_000;
 
@@ -220,6 +227,7 @@ function sessionSnapshot(sess, forPlayerId) {
 
   if (sess.phase === "answering") {
     const submitted = new Set(sess.answerSubmittedBy || []);
+    const tr = sess.textRoundNumber ?? 1;
     return {
       ...base,
       promptsMeta,
@@ -230,6 +238,8 @@ function sessionSnapshot(sess, forPlayerId) {
       answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
       answeringEndsAt: sess.answeringEndsAt ?? null,
       myAnswersSubmitted: submitted.has(forPlayerId),
+      textRoundNumber: tr,
+      showdownPointMultiplier: showdownPointMultiplier(sess),
     };
   }
 
@@ -244,7 +254,29 @@ function sessionSnapshot(sess, forPlayerId) {
     };
   }
 
-  if (sess.phase === "round2_splash") {
+  if (sess.phase === "round2_text_splash") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
+    };
+  }
+
+  if (sess.phase === "round2_scores") {
+    return {
+      ...base,
+      promptsMeta,
+      scores: { ...sess.scores },
+      lastResult: publicLastResult(sess.lastShowdownResult),
+      winner: null,
+      showdown: null,
+    };
+  }
+
+  if (sess.phase === "photo_round_splash") {
     return {
       ...base,
       promptsMeta,
@@ -374,6 +406,7 @@ function sessionSnapshot(sess, forPlayerId) {
         ? publicLastResult(sess.lastShowdownResult)
         : null;
 
+    const tr = sess.textRoundNumber ?? 1;
     return {
       ...base,
       promptsMeta,
@@ -415,6 +448,8 @@ function sessionSnapshot(sess, forPlayerId) {
           eligibleVoters.length === 0 ||
           Object.keys(sess.showdownVotes[queueIndex] || {}).length ===
             eligibleVoters.length,
+        textRoundNumber: tr,
+        showdownPointMultiplier: showdownPointMultiplier(sess),
       },
       scores: { ...sess.scores },
       lastResult,
@@ -595,10 +630,24 @@ function clearRound1LeaderboardTimer(sess) {
   }
 }
 
-function clearRound2SplashTimer(sess) {
-  if (sess._round2SplashTimer) {
-    clearTimeout(sess._round2SplashTimer);
-    sess._round2SplashTimer = null;
+function clearPhotoRoundSplashTimer(sess) {
+  if (sess._photoRoundSplashTimer) {
+    clearTimeout(sess._photoRoundSplashTimer);
+    sess._photoRoundSplashTimer = null;
+  }
+}
+
+function clearRound2ScoresLeaderboardTimer(sess) {
+  if (sess._round2ScoresLeaderboardTimer) {
+    clearTimeout(sess._round2ScoresLeaderboardTimer);
+    sess._round2ScoresLeaderboardTimer = null;
+  }
+}
+
+function clearRound2TextSplashTimer(sess) {
+  if (sess._round2TextSplashTimer) {
+    clearTimeout(sess._round2TextSplashTimer);
+    sess._round2TextSplashTimer = null;
   }
 }
 
@@ -658,17 +707,19 @@ function clearAllGameTimers(sess) {
   clearAnsweringTimer(sess);
   clearShowdownTimers(sess);
   clearRound1LeaderboardTimer(sess);
-  clearRound2SplashTimer(sess);
+  clearRound2TextSplashTimer(sess);
+  clearPhotoRoundSplashTimer(sess);
+  clearRound2ScoresLeaderboardTimer(sess);
   clearPhotoRoundTimers(sess);
   clearPlayAgainTimer(sess);
 }
 
 /**
- * Build a fresh round from current `sess.players` and `sess.customPrompts`; set phase to answering and start timers.
- * Caller must ensure phase and player count are appropriate.
+ * Rebuild prompts, assignments, answering timers, and showdown queue.
+ * @param {{ resetScores: boolean }} opts
  */
-function commenceAnsweringPhase(sess) {
-  clearPlayAgainTimer(sess);
+function setupTextRoundAnswering(sess, opts) {
+  const { resetScores } = opts;
   const n = sess.players.length;
   const pool = buildGamePrompts(n, sess.customPrompts || []);
   const playerIds = sess.players.map((p) => p.id);
@@ -688,7 +739,9 @@ function commenceAnsweringPhase(sess) {
     sess.promptAltLocked[key] = false;
     sess.promptAltRejectedBy[key] = null;
   }
-  sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
+  if (resetScores) {
+    sess.scores = Object.fromEntries(playerIds.map((id) => [id, 0]));
+  }
   sess.phase = "answering";
   sess.answerSubmittedBy = [];
   const answerLimitSec = sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC;
@@ -735,9 +788,24 @@ function commenceAnsweringPhase(sess) {
   sess.showdownSplashActive = false;
   clearShowdownTimers(sess);
   clearRound1LeaderboardTimer(sess);
-  clearRound2SplashTimer(sess);
+  clearRound2TextSplashTimer(sess);
+  clearRound2ScoresLeaderboardTimer(sess);
+  clearPhotoRoundSplashTimer(sess);
   clearPhotoRoundTimers(sess);
   sess.photoRound = null;
+}
+
+/** New game / play again: text round 1 from scratch. */
+function commenceAnsweringPhase(sess) {
+  clearPlayAgainTimer(sess);
+  sess.textRoundNumber = 1;
+  setupTextRoundAnswering(sess, { resetScores: true });
+}
+
+/** After round 1 leaderboard: same format as round 1 but doubled showdown points. */
+function commenceSecondTextRound(sess) {
+  sess.textRoundNumber = 2;
+  setupTextRoundAnswering(sess, { resetScores: false });
 }
 
 function setWinnerFromScores(sess) {
@@ -937,6 +1005,7 @@ function finalizePhotoUpload(sess) {
 
 function beginRound1Leaderboard(sess) {
   clearRound1LeaderboardTimer(sess);
+  clearRound2TextSplashTimer(sess);
   clearShowdownTimers(sess);
   sess.bothFoldTimeline = null;
   sess.showdownReviewActive = false;
@@ -948,27 +1017,61 @@ function beginRound1Leaderboard(sess) {
     const s = sessions.get(code);
     if (!s || s.phase !== "round1_scores") return;
     s._round1LeaderboardTimer = null;
-    startRound2Splash(s);
+    startRound2TextSplash(s);
+    broadcastSession(s);
   }, ROUND1_LEADERBOARD_MS);
 }
 
-function startRound2Splash(sess) {
-  clearRound2SplashTimer(sess);
-  sess.phase = "round2_splash";
+function startRound2TextSplash(sess) {
+  clearRound2TextSplashTimer(sess);
+  sess.phase = "round2_text_splash";
+  const code = sess.code;
+  sess._round2TextSplashTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "round2_text_splash") return;
+    s._round2TextSplashTimer = null;
+    commenceSecondTextRound(s);
+    broadcastSession(s);
+  }, ROUND2_TEXT_SPLASH_MS);
+}
+
+function beginRound2ScoresLeaderboard(sess) {
+  clearRound2ScoresLeaderboardTimer(sess);
+  clearShowdownTimers(sess);
+  sess.bothFoldTimeline = null;
+  sess.showdownReviewActive = false;
+  sess.showdownSplashActive = false;
+  sess.phase = "round2_scores";
+  const code = sess.code;
+  broadcastSession(sess);
+  sess._round2ScoresLeaderboardTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "round2_scores") return;
+    s._round2ScoresLeaderboardTimer = null;
+    startPhotoRoundSplash(s);
+    broadcastSession(s);
+  }, ROUND1_LEADERBOARD_MS);
+}
+
+function startPhotoRoundSplash(sess) {
+  clearPhotoRoundSplashTimer(sess);
+  sess.phase = "photo_round_splash";
   broadcastSession(sess);
   const code = sess.code;
-  sess._round2SplashTimer = setTimeout(() => {
+  sess._photoRoundSplashTimer = setTimeout(() => {
     const s = sessions.get(code);
-    if (!s || s.phase !== "round2_splash") return;
-    s._round2SplashTimer = null;
+    if (!s || s.phase !== "photo_round_splash") return;
+    s._photoRoundSplashTimer = null;
     startPhotoRound(s);
     broadcastSession(s);
-  }, ROUND2_SPLASH_MS);
+  }, PHOTO_ROUND_SPLASH_MS);
 }
 
 function startPhotoRound(sess) {
   clearRound1LeaderboardTimer(sess);
-  clearRound2SplashTimer(sess);
+  clearRound2TextSplashTimer(sess);
+  clearRound2ScoresLeaderboardTimer(sess);
+  clearPhotoRoundSplashTimer(sess);
   clearPhotoRoundTimers(sess);
   initPhotoRoundState(sess);
   sess.phase = "photo_upload";
@@ -1015,7 +1118,11 @@ function beginShowdownFromAnswering(sess) {
 function bumpShowdownQueueAndMaybeEnd(sess) {
   sess.currentQueueIndex++;
   if (sess.currentQueueIndex >= sess.showdownQueue.length) {
-    beginRound1Leaderboard(sess);
+    if (sess.textRoundNumber === 2) {
+      beginRound2ScoresLeaderboard(sess);
+    } else {
+      beginRound1Leaderboard(sess);
+    }
   }
 }
 
@@ -1047,7 +1154,9 @@ function maybeStartBothFoldAutoAdvance(sess) {
     const forfeiterId = foldedAuthorIds[0];
     const winnerId = sd.authorIds.find((id) => id !== forfeiterId) ?? null;
     if (winnerId) {
-      sess.scores[winnerId] = (sess.scores[winnerId] || 0) + ROUND1_FORFEIT_WIN_POINTS;
+      const mult = showdownPointMultiplier(sess);
+      sess.scores[winnerId] =
+        (sess.scores[winnerId] || 0) + ROUND1_FORFEIT_WIN_POINTS * mult;
     }
   }
 
@@ -1152,12 +1261,16 @@ function advanceShowdown(sess) {
     else if (c === "B") votesForB++;
   }
 
+  const mult = showdownPointMultiplier(sess);
   const points = scoreShowdown(votesForA, votesForB, authors[0], authors[1]);
+  for (const pid of Object.keys(points)) {
+    points[pid] = Number(points[pid] || 0) * mult;
+  }
   const uni = isUnanimous(votesForA, votesForB);
   if (uni && eligible.length > 0) {
     const winningAuthor = uni.winner === "A" ? authors[0] : authors[1];
     points[winningAuthor] =
-      Number(points[winningAuthor] || 0) + ROUND1_MOG_BONUS_POINTS;
+      Number(points[winningAuthor] || 0) + ROUND1_MOG_BONUS_POINTS * mult;
   }
   for (const pid of Object.keys(points)) {
     sess.scores[pid] = (sess.scores[pid] || 0) + points[pid];
@@ -1636,6 +1749,7 @@ function startServer() {
       delete sess.answerSubmittedBy;
       delete sess.answeringEndsAt;
       delete sess.bothFoldTimeline;
+      delete sess.textRoundNumber;
 
       if (typeof cb === "function") cb({ ok: true });
       broadcastSession(sess);

@@ -712,7 +712,9 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const finalResultsTransition = session?.phase === "final_results_transition";
   const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
-  const round2Splash = session?.phase === "round2_splash";
+  const round2TextSplash = session?.phase === "round2_text_splash";
+  const round2Scores = session?.phase === "round2_scores";
+  const photoRoundSplash = session?.phase === "photo_round_splash";
   const ended = session?.phase === "ended";
   const sd = session?.showdown;
   const progress = session?.answerProgress ?? { done: [], waiting: [] };
@@ -1079,7 +1081,7 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
-      {(round1Scores || ended) && (
+      {(round1Scores || round2Scores || ended) && (
         <div className="projector-card">
           <ProjectorScoreDropBoard
             players={session.players}
@@ -1090,9 +1092,15 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
         </div>
       )}
 
-      {round2Splash && (
+      {round2TextSplash && (
         <div className="projector-card projector-photo-round">
-          <h2 className="projector-card-title">Round 2</h2>
+          <h2 className="projector-card-title">Round 2 - double points!</h2>
+        </div>
+      )}
+
+      {photoRoundSplash && (
+        <div className="projector-card projector-photo-round">
+          <h2 className="projector-card-title">Round 3</h2>
           <p className="muted projector-lead" style={{ textAlign: "center", marginBottom: 0 }}>
             Photo uploads open in a moment…
           </p>
@@ -1294,7 +1302,9 @@ export default function App() {
     if (
       session?.phase === "ended" ||
       session?.phase === "round1_scores" ||
-      session?.phase === "round2_splash" ||
+      session?.phase === "round2_text_splash" ||
+      session?.phase === "round2_scores" ||
+      session?.phase === "photo_round_splash" ||
       session?.phase === "final_results_transition" ||
       session?.phase === "play_again_transition"
     ) {
@@ -1669,7 +1679,9 @@ export default function App() {
   const finalResultsTransition = session?.phase === "final_results_transition";
   const playAgainTransition = session?.phase === "play_again_transition";
   const round1Scores = session?.phase === "round1_scores";
-  const round2Splash = session?.phase === "round2_splash";
+  const round2TextSplash = session?.phase === "round2_text_splash";
+  const round2Scores = session?.phase === "round2_scores";
+  const photoRoundSplash = session?.phase === "photo_round_splash";
   const ended = session?.phase === "ended";
   const knownPlayerPhase =
     lobby ||
@@ -1684,7 +1696,9 @@ export default function App() {
     finalResultsTransition ||
     playAgainTransition ||
     round1Scores ||
-    round2Splash ||
+    round2TextSplash ||
+    round2Scores ||
+    photoRoundSplash ||
     ended;
 
   const canVote = useMemo(() => {
@@ -1713,7 +1727,9 @@ export default function App() {
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&
     session?.phase !== "round1_scores" &&
-    session?.phase !== "round2_splash" &&
+    session?.phase !== "round2_text_splash" &&
+    session?.phase !== "round2_scores" &&
+    session?.phase !== "photo_round_splash" &&
     session?.phase !== "final_results_transition" &&
     session?.phase !== "play_again_transition" &&
     (session?.phase === "ended" || voteRevealVisible);
@@ -1807,8 +1823,8 @@ export default function App() {
         text={nextVoteSplashText}
       />
       <NextVoteSplash
-        active={session?.phase === "round2_splash"}
-        text="Round 2"
+        active={session?.phase === "photo_round_splash"}
+        text="Round 3"
       />
 
       {photoCropObjectUrl && (
@@ -2392,9 +2408,15 @@ export default function App() {
         </div>
       )}
 
-      {session && !isProjector && round2Splash && (
+      {session && !isProjector && round2TextSplash && (
         <div className="card">
-          <h2>Round 2</h2>
+          <h2>Round 2 - double points!</h2>
+        </div>
+      )}
+
+      {session && !isProjector && photoRoundSplash && (
+        <div className="card">
+          <h2>Round 3</h2>
           <p className="muted" style={{ marginBottom: 0 }}>
             Photo uploads are about to open…
           </p>
