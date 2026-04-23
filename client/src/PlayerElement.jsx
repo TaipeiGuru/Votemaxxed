@@ -41,14 +41,18 @@ const PLAYER_PALETTE = [
   "#F0EDD8",
 ];
 
-function stableIndexFromId(input) {
-  const str = String(input ?? "");
-  let hash = 0;
-  for (let i = 0; i < str.length; i += 1) {
-    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
-  }
-  return hash % PLAYER_PALETTE.length;
-}
+/** Keep non-host colors unique by binding each server-assigned icon key to a fixed palette slot. */
+const ICON_COLOR_MAP = {
+  heart: PLAYER_PALETTE[0],
+  hourglass: PLAYER_PALETTE[1],
+  club: PLAYER_PALETTE[2],
+  "chess-knight": PLAYER_PALETTE[3],
+  gem: PLAYER_PALETTE[4],
+  rocket: PLAYER_PALETTE[5],
+  skull: PLAYER_PALETTE[6],
+  flame: PLAYER_PALETTE[7],
+  dumbbell: PLAYER_PALETTE[8],
+};
 
 /**
  * @param {{ name: string; iconKey?: string; variant?: "default" | "compact"; className?: string; playerId?: string; hostPlayerId?: string }} props
@@ -69,7 +73,7 @@ export function PlayerElement({
   const backgroundColor =
     playerId && hostPlayerId && playerId === hostPlayerId
       ? HOST_COLOR
-      : PLAYER_PALETTE[stableIndexFromId(playerId || name)];
+      : ICON_COLOR_MAP[iconKey] || PLAYER_PALETTE[0];
 
   return (
     <div className={rootClass} style={{ backgroundColor }}>

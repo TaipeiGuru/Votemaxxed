@@ -33,8 +33,8 @@ const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
 /** Max time round-2 rank voting stays open; early finish when all ballots are complete. */
 const PHOTO_VOTING_DURATION_MS = 30000;
 const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
-/** How long the projector shows the round-2 vote breakdown (`photo_distribution`) before the end transition. */
-const PHOTO_DISTRIBUTION_VISIBLE_MS = 5000;
+/** How long the projector shows each round-2 pairing in `photo_distribution`. */
+const PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS = 5000;
 /** Point leaderboard after round 1 (before photo round); tuned for score-drop animation (~1300ms per score group). */
 const ROUND1_LEADERBOARD_MS = 15000;
 /** Full-screen style pause before round 2 photo uploads begin. */
@@ -45,10 +45,12 @@ const FINAL_RESULTS_TRANSITION_MS = 4000;
 /** Pause on all clients after "Play again" before a new answering phase. */
 const PLAY_AGAIN_TRANSITION_MS = 3500;
 const PHOTO_VOTE_POINTS = {
-  third: 50,
-  second: 100,
-  first: 150,
+  third: 60,
+  second: 120,
+  first: 180,
 };
+const ROUND1_FORFEIT_WIN_POINTS = 50;
+const ROUND1_MOG_BONUS_POINTS = 50;
 const PHOTO_VOTE_STAGE_ORDER = ["third", "second", "first"];
 const MAX_PHOTO_DATA_URL_LEN = 6_000_000;
 
@@ -861,6 +863,8 @@ function finalizePhotoVotingAndScore(sess) {
     sess.scores[pairing.captionerId] = (sess.scores[pairing.captionerId] || 0) + split;
   }
   const code = sess.code;
+  const photoDistributionVisibleMs =
+    (pr.pairings?.length || 0) * PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS;
   sess.phase = "photo_distribution_loading";
   broadcastSession(sess);
   sess._photoDistributionTimer = setTimeout(() => {
@@ -883,7 +887,7 @@ function finalizePhotoVotingAndScore(sess) {
         setWinnerFromScores(s4);
         broadcastSession(s4);
       }, FINAL_RESULTS_TRANSITION_MS);
-    }, PHOTO_DISTRIBUTION_VISIBLE_MS + PHOTO_END_TRANSITION_MS);
+    }, photoDistributionVisibleMs);
   }, PHOTO_DISTRIBUTION_REVIEW_MS);
 }
 
@@ -1035,6 +1039,17 @@ function maybeStartBothFoldAutoAdvance(sess) {
   const sd = getCurrentShowdown(sess);
   const foldedAuthorIds = getFoldedAuthorIds(sess, sd);
   if (foldedAuthorIds.length === 0) return false;
+  if (sess.bothFoldTimeline?.queueIndex === sess.currentQueueIndex) return true;
+
+  // For exactly one blank answer, treat it as a forfeit:
+  // non-blank author gets the full round-1 win value.
+  if (foldedAuthorIds.length === 1) {
+    const forfeiterId = foldedAuthorIds[0];
+    const winnerId = sd.authorIds.find((id) => id !== forfeiterId) ?? null;
+    if (winnerId) {
+      sess.scores[winnerId] = (sess.scores[winnerId] || 0) + ROUND1_FORFEIT_WIN_POINTS;
+    }
+  }
 
   clearShowdownTimers(sess);
   const queueIndex = sess.currentQueueIndex;
@@ -1138,6 +1153,12 @@ function advanceShowdown(sess) {
   }
 
   const points = scoreShowdown(votesForA, votesForB, authors[0], authors[1]);
+  const uni = isUnanimous(votesForA, votesForB);
+  if (uni && eligible.length > 0) {
+    const winningAuthor = uni.winner === "A" ? authors[0] : authors[1];
+    points[winningAuthor] =
+      Number(points[winningAuthor] || 0) + ROUND1_MOG_BONUS_POINTS;
+  }
   for (const pid of Object.keys(points)) {
     sess.scores[pid] = (sess.scores[pid] || 0) + points[pid];
   }
@@ -1160,7 +1181,6 @@ function advanceShowdown(sess) {
   const authorAName = sess.players.find((p) => p.id === authors[0])?.name ?? "?";
   const authorBName = sess.players.find((p) => p.id === authors[1])?.name ?? "?";
 
-  const uni = isUnanimous(votesForA, votesForB);
   let mogPayload = null;
   if (uni && eligible.length > 0) {
     const winningSide = uni.winner;

@@ -1804,7 +1804,7 @@ export default function App() {
       )}
       <NextVoteSplash
         active={!!session?.showdown?.splashActive || skipShowdownVotingScreen}
-        text={skipShowdownVotingScreen ? "Loading next matchup..." : nextVoteSplashText}
+        text={nextVoteSplashText}
       />
       <NextVoteSplash
         active={session?.phase === "round2_splash"}
@@ -2628,7 +2628,7 @@ export default function App() {
             className="muted"
             style={{ marginTop: "0.75rem", marginBottom: 0, fontSize: "1rem" }}
           >
-            Next round in {Math.max(0, answerTimeRemainingSec)}s…
+            1st round in {Math.max(0, answerTimeRemainingSec)}s…
           </p>
         </div>
       )}
