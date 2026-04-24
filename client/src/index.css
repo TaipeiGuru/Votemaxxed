@@ -784,6 +784,62 @@ label {
   justify-content: flex-end;
 }
 
+.projector-point-reveal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(0.35rem, 0.9vw, 0.55rem);
+  margin-top: clamp(0.15rem, 0.5vw, 0.35rem);
+}
+
+.projector-point-reveal--end {
+  align-items: flex-end;
+}
+
+.projector-point-badge {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(1.05rem, 2vw, 1.55rem);
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  padding: 0.4rem 0.95rem;
+  border-radius: 14px;
+  opacity: 0;
+  transform: translateY(14px) scale(0.9);
+  animation: projector-point-badge-in 0.58s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 1s;
+  background: rgba(139, 149, 168, 0.14);
+  border: 2px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.projector-point-badge--mog {
+  color: var(--accent-dim);
+  border-color: rgba(139, 149, 168, 0.45);
+  background: rgba(139, 149, 168, 0.1);
+  animation-delay: 1.76s;
+}
+
+@keyframes projector-point-badge-in {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .projector-point-badge {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .projector-point-badge--mog {
+    animation-delay: 0s;
+  }
+}
+
 .projector-voter-chip {
   flex: 0 1 auto;
   max-width: 100%;

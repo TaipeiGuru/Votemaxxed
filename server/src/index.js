@@ -176,6 +176,7 @@ function publicLastResult(r) {
     mog: r.mog,
     overlayPause: r.overlayPause,
     voteBreakdown: r.voteBreakdown,
+    answerScores: r.answerScores ?? null,
   };
 }
 
@@ -1262,15 +1263,17 @@ function advanceShowdown(sess) {
   }
 
   const mult = showdownPointMultiplier(sess);
-  const points = scoreShowdown(votesForA, votesForB, authors[0], authors[1]);
-  for (const pid of Object.keys(points)) {
-    points[pid] = Number(points[pid] || 0) * mult;
+  const basePoints = scoreShowdown(votesForA, votesForB, authors[0], authors[1]);
+  for (const pid of Object.keys(basePoints)) {
+    basePoints[pid] = Number(basePoints[pid] || 0) * mult;
   }
+  const points = { ...basePoints };
   const uni = isUnanimous(votesForA, votesForB);
+  const mogBonusAmount =
+    uni && eligible.length > 0 ? ROUND1_MOG_BONUS_POINTS * mult : 0;
   if (uni && eligible.length > 0) {
     const winningAuthor = uni.winner === "A" ? authors[0] : authors[1];
-    points[winningAuthor] =
-      Number(points[winningAuthor] || 0) + ROUND1_MOG_BONUS_POINTS * mult;
+    points[winningAuthor] = Number(points[winningAuthor] || 0) + mogBonusAmount;
   }
   for (const pid of Object.keys(points)) {
     sess.scores[pid] = (sess.scores[pid] || 0) + points[pid];
@@ -1336,6 +1339,18 @@ function advanceShowdown(sess) {
     votesForA,
     votesForB,
     points,
+    answerScores: {
+      sideA: {
+        base: basePoints[authors[0]] ?? 0,
+        mogBonus:
+          uni && eligible.length > 0 && uni.winner === "A" ? mogBonusAmount : 0,
+      },
+      sideB: {
+        base: basePoints[authors[1]] ?? 0,
+        mogBonus:
+          uni && eligible.length > 0 && uni.winner === "B" ? mogBonusAmount : 0,
+      },
+    },
     mog: mogPayload,
     overlayPause,
     voteBreakdown: {

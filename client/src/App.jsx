@@ -310,6 +310,39 @@ function endgameStandingForPlayer(you, players, scores) {
   return { score: myScore, rank: higher + 1, total: players.length };
 }
 
+function formatShowdownPointsDelta(n) {
+  const x = Number(n) || 0;
+  const s = x.toFixed(1);
+  return x >= 0 ? `+${s}` : s;
+}
+
+/** Floating point badges under an answer column (text rounds 1–2 projector reveal). */
+function ProjectorColumnPointReveal({ base, mogBonus, alignEnd, animKey }) {
+  const mog = Number(mogBonus) > 0;
+  const total = (Number(base) || 0) + (Number(mogBonus) || 0);
+  return (
+    <div
+      className={`projector-point-reveal${alignEnd ? " projector-point-reveal--end" : ""}`}
+      aria-live="polite"
+    >
+      {mog ? (
+        <>
+          <div key={`${animKey}-b`} className="projector-point-badge projector-point-badge--base">
+            {formatShowdownPointsDelta(base)} pts
+          </div>
+          <div key={`${animKey}-m`} className="projector-point-badge projector-point-badge--mog">
+            MOG {formatShowdownPointsDelta(mogBonus)} pts
+          </div>
+        </>
+      ) : (
+        <div key={`${animKey}-t`} className="projector-point-badge projector-point-badge--total">
+          {formatShowdownPointsDelta(total)} pts
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Shared projector layout: two answer panels + voter chips below (voting and breakdown). */
 function ProjectorDualAnswerColumns({
   showAuthors,
@@ -325,6 +358,9 @@ function ProjectorDualAnswerColumns({
   votersForB,
   hostPlayerId,
   rowClassName = "",
+  answerPointScores = null,
+  answerPointsAnimate = false,
+  answerPointsAnimKey = "",
 }) {
   const left = projectorVoterChipEntries(votersForA);
   const right = projectorVoterChipEntries(votersForB);
@@ -375,6 +411,14 @@ function ProjectorDualAnswerColumns({
             />
           ))}
         </div>
+        {answerPointScores != null && answerPointsAnimate ? (
+          <ProjectorColumnPointReveal
+            animKey={`${answerPointsAnimKey}-a`}
+            base={answerPointScores.sideA.base}
+            mogBonus={answerPointScores.sideA.mogBonus}
+            alignEnd={false}
+          />
+        ) : null}
       </div>
       <div className="projector-answer-stack">
         <div
@@ -417,6 +461,14 @@ function ProjectorDualAnswerColumns({
             />
           ))}
         </div>
+        {answerPointScores != null && answerPointsAnimate ? (
+          <ProjectorColumnPointReveal
+            animKey={`${answerPointsAnimKey}-b`}
+            base={answerPointScores.sideB.base}
+            mogBonus={answerPointScores.sideB.mogBonus}
+            alignEnd
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -738,6 +790,15 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
   const breakdownVisible =
     !!session?.lastResult?.voteBreakdown && showVoteDistribution;
 
+  const projectorTextRound = Number(session?.showdown?.textRoundNumber);
+  const projectorAnswerPointScores =
+    breakdownVisible &&
+    session?.phase === "showdown" &&
+    (projectorTextRound === 1 || projectorTextRound === 2) &&
+    session?.lastResult?.answerScores
+      ? session.lastResult.answerScores
+      : null;
+
   const projectorHeaderMatchPlayer = photoDistributionLoading;
 
   return (
@@ -885,6 +946,9 @@ function ProjectorView({ session, showVoteDistribution, answerTimeRemainingSec, 
             votersForA={sd.votersForA ?? []}
             votersForB={sd.votersForB ?? []}
             hostPlayerId={session.hostPlayerId}
+            answerPointScores={projectorAnswerPointScores}
+            answerPointsAnimate={!!projectorAnswerPointScores}
+            answerPointsAnimKey={String(session.lastResult?.queueIndex ?? "")}
           />
         </div>
       )}
