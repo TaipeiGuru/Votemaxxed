@@ -778,7 +778,8 @@ function setupTextRoundAnswering(sess, opts) {
 
   const showdownQueue = [];
   for (let pass = 0; pass < SHOWDOWN_PASSES; pass++) {
-    for (let i = 0; i < n; i++) showdownQueue.push(i);
+    const indices = Array.from({ length: n }, (_, i) => i);
+    showdownQueue.push(...shuffle(indices));
   }
   sess.showdownQueue = showdownQueue;
   sess.currentQueueIndex = 0;

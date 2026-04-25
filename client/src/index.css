@@ -7,6 +7,8 @@
   --accent: #e8c547;
   --accent-dim: #9a7b1c;
   --danger: #e05d5d;
+  --warning: #b87a45;
+  --warning-dim: #8a5f38;
   --ok: #5dd39e;
   --font-sans: "DM Sans", system-ui, sans-serif;
   --font-display: "Instrument Serif", Georgia, serif;
@@ -1257,6 +1259,102 @@ label {
 .photo-crop-primary {
   background: linear-gradient(135deg, var(--accent), #c9a22e);
   color: #1a1408;
+}
+
+/* Report bad prompt — toolbar trigger (answering, next to alternate prompt) */
+.report-bad-prompt-toolbar-btn {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid var(--warning);
+  color: var(--warning);
+}
+
+.report-bad-prompt-toolbar-btn:hover {
+  background: transparent;
+  color: #c99862;
+  border-color: #c99862;
+}
+
+/* Report bad prompt (answering phase, text rounds 1–2) */
+.report-bad-prompt-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.report-bad-prompt-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 17, 20, 0.88);
+}
+
+.report-bad-prompt-modal-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  padding: 1.25rem 1.35rem;
+  border-radius: 16px;
+  border: 1px solid rgba(184, 122, 69, 0.42);
+  background: var(--surface);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(184, 122, 69, 0.1);
+}
+
+.report-bad-prompt-modal-title {
+  margin: 0 0 0.75rem;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  color: var(--warning);
+}
+
+.report-bad-prompt-modal-body {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.report-bad-prompt-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1.35rem;
+}
+
+.report-bad-prompt-modal-btn {
+  padding: 0.45rem 0.95rem;
+  font-size: 0.9rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.report-bad-prompt-modal-btn--secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.report-bad-prompt-modal-btn--primary {
+  background: linear-gradient(135deg, var(--warning), var(--warning-dim));
+  border: 1px solid rgba(184, 122, 69, 0.45);
+  color: #1a1408;
+  font-weight: 700;
+}
+
+.report-bad-prompt-modal-btn--primary:hover {
+  filter: brightness(1.06);
 }
 
 /* Photo round — independent rank voting (3rd / 2nd / 1st) */

@@ -213,6 +213,59 @@ function PhotoSquareCropModal({ imageSrc, onCancel, onConfirm, submitting = fals
   );
 }
 
+function ReportBadPromptModal({ onClose, onConfirm }) {
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className="report-bad-prompt-modal"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div className="report-bad-prompt-modal-backdrop" aria-hidden />
+      <div
+        className="report-bad-prompt-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="report-bad-prompt-heading"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 id="report-bad-prompt-heading" className="report-bad-prompt-modal-title">
+          Report bad prompt
+        </h3>
+        <p className="report-bad-prompt-modal-body">
+          Are you sure you want to report this as a low tier normie prompt?
+        </p>
+        <div className="report-bad-prompt-modal-actions">
+          <button
+            type="button"
+            className="report-bad-prompt-modal-btn report-bad-prompt-modal-btn--secondary"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="report-bad-prompt-modal-btn report-bad-prompt-modal-btn--primary"
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function useSocket() {
   const ref = useRef(null);
   if (!ref.current) {
@@ -1281,6 +1334,8 @@ export default function App() {
   const [customPromptDraft, setCustomPromptDraft] = useState("");
   const [showCustomPromptInfo, setShowCustomPromptInfo] = useState(false);
   const [voteRevealVisible, setVoteRevealVisible] = useState(false);
+  /** Prompt index key (`String(p.index)`) while report confirmation is open. */
+  const [reportBadPromptKey, setReportBadPromptKey] = useState(null);
   const [endgameBusy, setEndgameBusy] = useState(false);
   const [answerTimeLeftMs, setAnswerTimeLeftMs] = useState(0);
   const pendingVoteRevealRef = useRef(null);
@@ -1355,6 +1410,10 @@ export default function App() {
       }
     };
   }, [socket]);
+
+  useEffect(() => {
+    if (session?.phase !== "answering") setReportBadPromptKey(null);
+  }, [session?.phase]);
 
   useEffect(() => {
     const lr = session?.lastResult;
@@ -1732,6 +1791,9 @@ export default function App() {
 
   const lobby = session?.phase === "lobby";
   const answering = session?.phase === "answering";
+  const answerPhaseTextRound = Number(session?.textRoundNumber ?? 1);
+  const showReportBadPromptButton =
+    answering && (answerPhaseTextRound === 1 || answerPhaseTextRound === 2);
   const showdown = session?.phase === "showdown";
   const photoUpload = session?.phase === "photo_upload";
   const photoCaptionTransition = session?.phase === "photo_caption_transition";
@@ -1909,6 +1971,13 @@ export default function App() {
               closePhotoCropper();
             });
           }}
+        />
+      )}
+
+      {reportBadPromptKey !== null && (
+        <ReportBadPromptModal
+          onClose={() => setReportBadPromptKey(null)}
+          onConfirm={() => {}}
         />
       )}
 
@@ -2339,6 +2408,15 @@ export default function App() {
                   >
                     {showAlt ? "Hide alternate prompt" : "Show alternate prompt"}
                   </button>
+                  {showReportBadPromptButton ? (
+                    <button
+                      type="button"
+                      className="report-bad-prompt-toolbar-btn"
+                      onClick={() => setReportBadPromptKey(key)}
+                    >
+                      Report bad prompt
+                    </button>
+                  ) : null}
                   {incomingRequest ? (
                     <>
                       <button
