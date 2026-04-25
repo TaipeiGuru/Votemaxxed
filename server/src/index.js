@@ -11,171 +11,58 @@ import {
   reportPrompt,
 } from "./prompts.js";
 import { buildAssignments, scoreShowdown, isUnanimous } from "./gameLogic.js";
-
-const PORT = Number(process.env.PORT) || 3001;
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "http://localhost:5173";
-
-/** How many full passes over all prompts. */
-const SHOWDOWN_PASSES = 1;
-const ANSWER_TIME_OPTIONS_SEC = [60, 75, 90];
-const DEFAULT_ANSWER_TIME_SEC = 75;
-const ANSWER_TIMEUP_SUBMIT_GRACE_MS = 1200;
-
-/** Time vote distribution stays on screen before advancing (after mog/chud when applicable). */
-const VOTE_DISTRIBUTION_REVIEW_MS = 7500;
-/** Extra delay so overlays can finish before the distribution window counts in earnest. */
-const OVERLAY_BEFORE_REVIEW_MS = 3600;
-/** Splash between vote distribution and the next prompt. */
-const NEXT_VOTE_SPLASH_MS = 3000;
-const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
-const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
-const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
-const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
-/** Max time photo-round rank voting stays open; early finish when all ballots are complete. */
-const PHOTO_VOTING_DURATION_MS = 30000;
-const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
-/** How long the projector shows each pairing in `photo_distribution`. */
-const PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS = 5000;
-/** Mid-game scoreboard duration (after text round 1 and after doubled text round 2). */
-const ROUND1_LEADERBOARD_MS = 15000;
-/** Splash after round 1 leaderboard, before round 2 answering (double points). */
-const ROUND2_TEXT_SPLASH_MS = 3000;
-/** Full-screen pause before photo uploads (after text rounds). */
-const PHOTO_ROUND_SPLASH_MS = 3000;
-const PHOTO_END_TRANSITION_MS = 2500;
-/** Splash before the end-game scoreboard (after photo round wrap-up). */
-const FINAL_RESULTS_TRANSITION_MS = 4000;
-/** Pause on all clients after "Play again" before a new answering phase. */
-const PLAY_AGAIN_TRANSITION_MS = 3500;
-const PHOTO_VOTE_POINTS = {
-  third: 60,
-  second: 120,
-  first: 180,
-};
-const ROUND1_FORFEIT_WIN_POINTS = 50;
-const ROUND1_MOG_BONUS_POINTS = 50;
-
-/** Second text round doubles showdown-derived points (vote split, MOG, forfeit). */
-function showdownPointMultiplier(sess) {
-  return sess?.textRoundNumber === 2 ? 2 : 1;
-}
-const PHOTO_VOTE_STAGE_ORDER = ["third", "second", "first"];
-const MAX_PHOTO_DATA_URL_LEN = 6_000_000;
-const MAX_ACTIVE_SESSIONS = 500;
+import {
+  ANSWER_TIMEUP_SUBMIT_GRACE_MS,
+  ANSWER_TIME_OPTIONS_SEC,
+  BOTH_FOLD_OVERLAY_DELAY_MS,
+  BOTH_FOLD_OVERLAY_DURATION_MS,
+  CLIENT_ORIGIN,
+  DEFAULT_ANSWER_TIME_SEC,
+  DEFAULT_EVENT_PAYLOAD_MAX_BYTES,
+  FINAL_RESULTS_TRANSITION_MS,
+  HOST_ICON_KEY,
+  MAX_ACTIVE_SESSIONS,
+  MAX_PHOTO_DATA_URL_LEN,
+  MAX_PLAYERS,
+  NEXT_VOTE_SPLASH_MS,
+  OVERLAY_BEFORE_REVIEW_MS,
+  PHOTO_CAPTION_TO_VOTE_LOADING_MS,
+  PHOTO_DISTRIBUTION_REVIEW_MS,
+  PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS,
+  PHOTO_EVENT_PAYLOAD_MAX_BYTES,
+  PHOTO_ROUND_SPLASH_MS,
+  PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS,
+  PHOTO_VOTE_POINTS,
+  PHOTO_VOTE_STAGE_ORDER,
+  PHOTO_VOTING_DURATION_MS,
+  PLAY_AGAIN_TRANSITION_MS,
+  PLAYER_ICON_KEYS,
+  PORT,
+  RATE_LIMITS,
+  ROUND1_FORFEIT_WIN_POINTS,
+  ROUND1_LEADERBOARD_MS,
+  ROUND1_MOG_BONUS_POINTS,
+  ROUND2_TEXT_SPLASH_MS,
+  SHOWDOWN_PASSES,
+  SOCKET_EVENT_PAYLOAD_LIMITS,
+  VOTE_DISTRIBUTION_REVIEW_MS,
+  showdownPointMultiplier,
+  pickChudTease,
+} from "./constants.js";
+import { allowByRateLimit } from "./utils/rateLimit.js";
+import { clampIntInput, clampStringInput, isPlainObject, payloadBytes } from "./utils/input.js";
+import { shuffle } from "./utils/random.js";
+import {
+  isAllAnswersIn,
+  getCurrentShowdown,
+  getFoldedAuthorIds,
+  tallyVotes,
+  liveVoterRowsForShowdown,
+  sessionSnapshot,
+  sessionSnapshotForProjector,
+} from "./sessionSnapshot.js";
 
 const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 6);
-
-const RATE_LIMITS = {
-  createSession: { max: 5, windowMs: 60_000 },
-  joinSession: { max: 20, windowMs: 60_000 },
-  reportBadPrompt: { max: 6, windowMs: 60_000 },
-};
-const DEFAULT_EVENT_PAYLOAD_MAX_BYTES = 16 * 1024;
-const LARGER_EVENT_PAYLOAD_MAX_BYTES = 128 * 1024;
-const PHOTO_EVENT_PAYLOAD_MAX_BYTES = 7 * 1024 * 1024;
-const SOCKET_EVENT_PAYLOAD_LIMITS = {
-  submit_photo: PHOTO_EVENT_PAYLOAD_MAX_BYTES,
-  submit_answers: LARGER_EVENT_PAYLOAD_MAX_BYTES,
-};
-const requestBuckets = new Map();
-const textEncoder = new TextEncoder();
-
-function clientAddress(socket) {
-  return String(socket?.handshake?.address || "unknown");
-}
-
-function allowByRateLimit(socket, action, cfg) {
-  const ip = clientAddress(socket);
-  const now = Date.now();
-  const key = `${ip}:${action}`;
-  const bucket = requestBuckets.get(key) || { count: 0, resetAt: now + cfg.windowMs };
-  if (now > bucket.resetAt) {
-    bucket.count = 0;
-    bucket.resetAt = now + cfg.windowMs;
-  }
-  bucket.count += 1;
-  requestBuckets.set(key, bucket);
-  return bucket.count <= cfg.max;
-}
-
-function isPlainObject(v) {
-  return !!v && typeof v === "object" && !Array.isArray(v);
-}
-
-function payloadBytes(value) {
-  try {
-    return textEncoder.encode(JSON.stringify(value)).length;
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
-}
-
-function clampStringInput(value, opts = {}) {
-  const {
-    minLen = 0,
-    maxLen = 128,
-    trim = true,
-    uppercase = false,
-    pattern = null,
-  } = opts;
-  if (typeof value !== "string") return null;
-  let out = trim ? value.trim() : value;
-  if (uppercase) out = out.toUpperCase();
-  if (out.length < minLen || out.length > maxLen) return null;
-  if (pattern && !pattern.test(out)) return null;
-  return out;
-}
-
-function clampIntInput(value, opts = {}) {
-  const { min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = opts;
-  if (typeof value === "string" && value.trim() === "") return null;
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < min || n > max) return null;
-  return n;
-}
-
-/** Sentinel player id so `sessionSnapshot` can build an observer-style state for projectors. */
-const PROJECTOR_SENTINEL_ID = "__projector__";
-
-const CHUD_TEASES = [
-  "The jury stayed home. Your answer sent the invites straight to spam.",
-  "Zero votes — statistically indistinguishable from a haunted house: everyone fled.",
-  "Not one soul clicked for you. The silence is louder than the prompt.",
-  "You asked for love; the room answered with abstinence.",
-  "That answer aged like milk in a sauna. No takers.",
-  "Unanimous… against you. Even the UI feels awkward right now.",
-  "Your opus landed with the grace of a dropped piano. Zero believers.",
-  "They read it. They scrolled. They chose life.",
-];
-
-function pickChudTease() {
-  return CHUD_TEASES[Math.floor(Math.random() * CHUD_TEASES.length)];
-}
-
-function shuffle(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function publicPromptAltState(sess) {
-  const out = {};
-  const n = sess?.gamePrompts?.length ?? 0;
-  for (let i = 0; i < n; i++) {
-    const key = String(i);
-    out[key] = {
-      altText: sess.alternatePrompts?.[key] ?? "",
-      swapped: !!sess.promptAltSwapped?.[key],
-      locked: !!sess.promptAltLocked?.[key],
-      rejectedBy: sess.promptAltRejectedBy?.[key] ?? null,
-      requestedBy: [...(sess.promptAltRequestedBy?.[key] || [])],
-    };
-  }
-  return out;
-}
 
 const app = express();
 app.use(cors({ origin: CLIENT_ORIGIN }));
@@ -183,23 +70,6 @@ app.use(express.json({ limit: "32kb", strict: true }));
 
 /** @type {Map<string, object>} */
 const sessions = new Map();
-
-/** Lucide icon keys; one unique assignment per player (max 10). */
-const HOST_ICON_KEY = "chess-queen";
-const PLAYER_ICON_KEYS = [
-  "heart",
-  "hourglass",
-  HOST_ICON_KEY,
-  "club",
-  "chess-knight",
-  "gem",
-  "rocket",
-  "skull",
-  "flame",
-  "dumbbell",
-];
-
-const MAX_PLAYERS = 10;
 
 function ensureIconDeck(sess) {
   if (sess._iconDeck == null) {
@@ -216,356 +86,6 @@ function takeNextIconKey(sess) {
   return sess._iconDeck[sess._iconDeckCursor++];
 }
 
-function publicPlayer(p) {
-  return { id: p.id, name: p.name, iconKey: p.iconKey };
-}
-
-function publicLastResult(r) {
-  if (!r) return null;
-  return {
-    queueIndex: r.queueIndex,
-    votesForA: r.votesForA,
-    votesForB: r.votesForB,
-    mog: r.mog,
-    overlayPause: r.overlayPause,
-    voteBreakdown: r.voteBreakdown,
-    answerScores: r.answerScores ?? null,
-  };
-}
-
-function isPhotoRoundPhase(phase) {
-  return (
-    phase === "photo_upload" ||
-    phase === "photo_caption_transition" ||
-    phase === "photo_captioning" ||
-    phase === "photo_vote_loading" ||
-    phase === "photo_distribution_loading" ||
-    phase === "photo_voting" ||
-    phase === "photo_distribution"
-  );
-}
-
-function sessionSnapshot(sess, forPlayerId) {
-  const base = {
-    code: sess.code,
-    phase: sess.phase,
-    hostPlayerId: sess.hostPlayerId,
-    players: sess.players.map(publicPlayer),
-    you: forPlayerId,
-  };
-
-  if (sess.phase === "lobby") {
-    const isHostViewer = forPlayerId && forPlayerId === sess.hostPlayerId;
-    return {
-      ...base,
-      customPrompts: isHostViewer ? [...(sess.customPrompts || [])] : [],
-      maxCustomPrompts: sess.players.length,
-      answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
-    };
-  }
-
-  const n = sess.gamePrompts.length;
-  const promptsMeta = sess.gamePrompts.map((p, i) => ({
-    index: i,
-    id: p.id,
-    text: p.text,
-    authorIds: sess.assignments[i].authorIds,
-  }));
-
-  const myPrompts = promptsMeta.filter((p) => p.authorIds.includes(forPlayerId));
-
-  const answersMine = {};
-  for (const mp of myPrompts) {
-    const idx = String(mp.index);
-    answersMine[idx] = sess.answers[idx]?.[forPlayerId] ?? "";
-  }
-
-  if (sess.phase === "answering") {
-    const submitted = new Set(sess.answerSubmittedBy || []);
-    const tr = sess.textRoundNumber ?? 1;
-    return {
-      ...base,
-      promptsMeta,
-      myPrompts,
-      answersMine,
-      allAnswersIn: isAllAnswersIn(sess),
-      promptAlt: publicPromptAltState(sess),
-      answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
-      answeringEndsAt: sess.answeringEndsAt ?? null,
-      myAnswersSubmitted: submitted.has(forPlayerId),
-      textRoundNumber: tr,
-      showdownPointMultiplier: showdownPointMultiplier(sess),
-    };
-  }
-
-  if (sess.phase === "round1_scores") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "round2_text_splash") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "round2_scores") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "photo_round_splash") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "final_results_transition") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "play_again_transition") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: sess.winner ?? null,
-      showdown: null,
-      playAgainEndsAt: sess.playAgainEndsAt ?? null,
-    };
-  }
-
-  if (isPhotoRoundPhase(sess.phase)) {
-    const isProjectorViewer = forPlayerId === PROJECTOR_SENTINEL_ID;
-    const pr = sess.photoRound || {};
-    const myVoteState = pr.rankedVotes?.[forPlayerId] || {};
-    const myAssignedUploaderId = pr.captionAssignments?.[forPlayerId] ?? null;
-    const myCaptionText = pr.captions?.[forPlayerId] ?? "";
-    const myPhotoDataUrl = pr.uploads?.[forPlayerId] ?? "";
-    const pairingsPublic = (pr.pairings || []).map((p) => ({
-      number: p.number,
-      photoDataUrl: p.photoDataUrl || "",
-      captionText: p.captionText || "",
-      points: Number(p.points || 0),
-    }));
-    const distributionSorted = [...pairingsPublic].sort((a, b) => {
-      if (a.points !== b.points) return b.points - a.points;
-      return a.number - b.number;
-    });
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      photoRound: {
-        stage: sess.phase,
-        answerTimeLimitSec: sess.answerTimeLimitSec ?? DEFAULT_ANSWER_TIME_SEC,
-        uploadEndsAt: pr.uploadEndsAt ?? null,
-        captionEndsAt: pr.captionEndsAt ?? null,
-        voteEndsAt: pr.voteEndsAt ?? null,
-        uploadProgress: isProjectorViewer ? computePhotoUploadProgress(sess) : undefined,
-        captionProgress: isProjectorViewer ? computePhotoCaptionProgress(sess) : undefined,
-        myPhotoSubmitted: (pr.uploadSubmittedBy || []).includes(forPlayerId),
-        myPhotoDataUrl,
-        myAssignedPhoto:
-          sess.phase === "photo_captioning" ||
-          sess.phase === "photo_vote_loading" ||
-          sess.phase === "photo_distribution_loading" ||
-          sess.phase === "photo_voting" ||
-          sess.phase === "photo_distribution"
-            ? {
-                photoDataUrl: pr.uploads?.[myAssignedUploaderId] || "",
-              }
-            : null,
-        myCaptionText,
-        myCaptionSubmitted: (pr.captionSubmittedBy || []).includes(forPlayerId),
-        voteChoices: (pr.pairings || []).map((p) => p.number),
-        myVotes: {
-          third: myVoteState.third ?? null,
-          second: myVoteState.second ?? null,
-          first: myVoteState.first ?? null,
-        },
-        pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
-        distribution:
-          isProjectorViewer && sess.phase === "photo_distribution"
-            ? { pairings: distributionSorted }
-            : null,
-      },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "ended") {
-    return {
-      ...base,
-      promptsMeta,
-      scores: { ...sess.scores },
-      lastResult: publicLastResult(sess.lastShowdownResult),
-      winner: sess.winner ?? null,
-      showdown: null,
-    };
-  }
-
-  if (sess.phase === "showdown") {
-    const sd = getCurrentShowdown(sess);
-    const queueIndex = sess.currentQueueIndex;
-    const promptIndex = sd.promptIndex;
-    const authors = sd.authorIds;
-    const foldedAuthorIds = getFoldedAuthorIds(sess, sd);
-    const answerA = sess.answers[String(promptIndex)]?.[authors[0]] ?? "";
-    const answerB = sess.answers[String(promptIndex)]?.[authors[1]] ?? "";
-    const eligibleVoters = sess.players
-      .map((p) => p.id)
-      .filter((id) => !authors.includes(id));
-
-    const myVote =
-      sess.showdownVotes[sess.currentQueueIndex]?.[forPlayerId] ?? null;
-
-    const voteCounts = tallyVotes(sess, sd);
-    const { votersForA, votersForB } = liveVoterRowsForShowdown(sess, sd);
-    const lastResult =
-      sess.lastShowdownResult &&
-      (sess.lastShowdownResult.queueIndex < sess.currentQueueIndex ||
-        sess.showdownReviewActive)
-        ? publicLastResult(sess.lastShowdownResult)
-        : null;
-
-    const tr = sess.textRoundNumber ?? 1;
-    return {
-      ...base,
-      promptsMeta,
-      showdown: {
-        queueIndex,
-        totalShowdowns: sess.showdownQueue.length,
-        passNumber: Math.floor(queueIndex / n) + 1,
-        passesTotal: SHOWDOWN_PASSES,
-        promptIndex,
-        promptText: sess.gamePrompts[promptIndex].text,
-        answerA,
-        answerB,
-        authorA: authors[0],
-        authorB: authors[1],
-        eligibleVoters,
-        votesCast: Object.keys(sess.showdownVotes[queueIndex] || {}).length,
-        votesNeeded: eligibleVoters.length,
-        voteCounts,
-        votersForA,
-        votersForB,
-        myVote,
-        reviewActive: !!sess.showdownReviewActive,
-        splashActive: !!sess.showdownSplashActive,
-        bothFolded: foldedAuthorIds.length === 2,
-        foldedAuthorIds,
-        bothFoldStartsAt:
-          sess.bothFoldTimeline?.queueIndex === queueIndex
-            ? sess.bothFoldTimeline.startsAt
-            : null,
-        bothFoldEndsAt:
-          sess.bothFoldTimeline?.queueIndex === queueIndex
-            ? sess.bothFoldTimeline.endsAt
-            : null,
-        bothFoldAuthorIds:
-          sess.bothFoldTimeline?.queueIndex === queueIndex
-            ? [...(sess.bothFoldTimeline.foldedAuthorIds || [])]
-            : [],
-        everyoneVoted:
-          eligibleVoters.length === 0 ||
-          Object.keys(sess.showdownVotes[queueIndex] || {}).length ===
-            eligibleVoters.length,
-        textRoundNumber: tr,
-        showdownPointMultiplier: showdownPointMultiplier(sess),
-      },
-      scores: { ...sess.scores },
-      lastResult,
-      winner: null,
-    };
-  }
-
-  return base;
-}
-
-function isAllAnswersIn(sess) {
-  const submitted = new Set(sess.answerSubmittedBy || []);
-  return submitted.size >= sess.players.length;
-}
-
-function getCurrentShowdown(sess) {
-  const qi = sess.currentQueueIndex;
-  const promptIndex = sess.showdownQueue[qi];
-  return {
-    promptIndex,
-    authorIds: [...sess.assignments[promptIndex].authorIds],
-  };
-}
-
-function getFoldedAuthorIds(sess, sd = getCurrentShowdown(sess)) {
-  const promptIndex = sd.promptIndex;
-  const authors = sd.authorIds;
-  const answerA = String(sess.answers[String(promptIndex)]?.[authors[0]] ?? "").trim();
-  const answerB = String(sess.answers[String(promptIndex)]?.[authors[1]] ?? "").trim();
-  const folded = [];
-  if (answerA.length === 0) folded.push(authors[0]);
-  if (answerB.length === 0) folded.push(authors[1]);
-  return folded;
-}
-
-function tallyVotes(sess, sd) {
-  const votes = sess.showdownVotes[sess.currentQueueIndex] || {};
-  let a = 0;
-  let b = 0;
-  const authors = sd.authorIds;
-  for (const v of Object.values(votes)) {
-    if (v === "A") a++;
-    else if (v === "B") b++;
-  }
-  return { A: a, B: b, authorA: authors[0], authorB: authors[1] };
-}
-
-/** Eligible voters who have cast A/B, in session roster order (for projector live lists). */
-function liveVoterRowsForShowdown(sess, sd) {
-  const votes = sess.showdownVotes[sess.currentQueueIndex] || {};
-  const authors = sd.authorIds;
-  const votersForA = [];
-  const votersForB = [];
-  for (const p of sess.players) {
-    if (authors.includes(p.id)) continue;
-    const c = votes[p.id];
-    if (c === "A") votersForA.push({ id: p.id, name: p.name, iconKey: p.iconKey });
-    else if (c === "B") votersForB.push({ id: p.id, name: p.name, iconKey: p.iconKey });
-  }
-  return { votersForA, votersForB };
-}
 
 function findPlayerBySocket(socketId) {
   for (const sess of sessions.values()) {
@@ -581,56 +101,6 @@ function findProjectorBySocket(socketId) {
     if (pr) return { sess, projector: pr };
   }
   return null;
-}
-
-function playerHasBothAnswersSaved(sess, playerId) {
-  const submitted = new Set(sess.answerSubmittedBy || []);
-  return submitted.has(playerId);
-}
-
-function computeAnswerProgress(sess) {
-  const done = [];
-  const waiting = [];
-  for (const p of sess.players) {
-    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
-    if (playerHasBothAnswersSaved(sess, p.id)) done.push(row);
-    else waiting.push(row);
-  }
-  return { done, waiting };
-}
-
-function computePhotoUploadProgress(sess) {
-  const doneSet = new Set(sess.photoRound?.uploadSubmittedBy || []);
-  const done = [];
-  const waiting = [];
-  for (const p of sess.players) {
-    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
-    if (doneSet.has(p.id)) done.push(row);
-    else waiting.push(row);
-  }
-  return { done, waiting };
-}
-
-function computePhotoCaptionProgress(sess) {
-  const doneSet = new Set(sess.photoRound?.captionSubmittedBy || []);
-  const done = [];
-  const waiting = [];
-  for (const p of sess.players) {
-    const row = { id: p.id, name: p.name, iconKey: p.iconKey };
-    if (doneSet.has(p.id)) done.push(row);
-    else waiting.push(row);
-  }
-  return { done, waiting };
-}
-
-function sessionSnapshotForProjector(sess) {
-  const snap = sessionSnapshot(sess, PROJECTOR_SENTINEL_ID);
-  return {
-    ...snap,
-    role: "projector",
-    you: null,
-    ...(sess.phase === "answering" && { answerProgress: computeAnswerProgress(sess) }),
-  };
 }
 
 function findSessionByCode(code) {
@@ -878,7 +348,7 @@ function setWinnerFromScores(sess) {
   }
   sess.winner = {
     names: winners.map((w) => w.name),
-    players: winners.map(publicPlayer),
+    players: winners.map((w) => ({ id: w.id, name: w.name, iconKey: w.iconKey })),
     score: best,
   };
 }
@@ -2307,13 +1777,7 @@ function startServer() {
       const cast = Object.keys(sess.showdownVotes[qi] || {}).length;
       broadcastSession(sess);
 
-      if (eligible.length > 0 && cast >= eligible.length) {
-        advanceShowdown(sess);
-        skipShowdownsWithNoVoters(sess);
-        if (!maybeStartBothFoldAutoAdvance(sess)) {
-          broadcastSession(sess);
-        }
-      } else if (eligible.length === 0) {
+      if (cast >= eligible.length) {
         advanceShowdown(sess);
         skipShowdownsWithNoVoters(sess);
         if (!maybeStartBothFoldAutoAdvance(sess)) {
