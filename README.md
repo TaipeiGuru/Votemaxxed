@@ -1,4 +1,4 @@
-# Votemaxxed (Prompt Mogger)
+# Votemaxxed
 
 Realtime party game where players write answers, vote head-to-head, and finish with a photo/caption ranking round.
 
