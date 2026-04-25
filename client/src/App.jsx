@@ -2030,16 +2030,23 @@ export default function App() {
               <input
                 id="code"
                 value={codeInput}
-                onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
-                placeholder="ABCD"
-                maxLength={4}
+                onChange={(e) =>
+                  setCodeInput(
+                    e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, "")
+                      .slice(0, 6)
+                  )
+                }
+                placeholder="ABCDEF"
+                maxLength={6}
                 style={{ textTransform: "uppercase", letterSpacing: "0.2em" }}
               />
               <button
                 type="button"
                 onClick={joinSession}
                 disabled={
-                  codeInput.trim().length !== 4 || !name.trim()
+                  codeInput.trim().length !== 6 || !name.trim()
                 }
                 style={{
                   marginTop: "0.75rem",

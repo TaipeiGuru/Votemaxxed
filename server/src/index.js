@@ -6,8 +6,9 @@ import { Server } from "socket.io";
 import { nanoid, customAlphabet } from "nanoid";
 import {
   buildGamePrompts,
-  HARDCODED_PROMPTS,
+  buildAlternatePromptMap,
   MAX_PROMPT_TEXT_LEN,
+  reportPrompt,
 } from "./prompts.js";
 import { buildAssignments, scoreShowdown, isUnanimous } from "./gameLogic.js";
 
@@ -60,8 +61,78 @@ function showdownPointMultiplier(sess) {
 }
 const PHOTO_VOTE_STAGE_ORDER = ["third", "second", "first"];
 const MAX_PHOTO_DATA_URL_LEN = 6_000_000;
+const MAX_ACTIVE_SESSIONS = 500;
 
-const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
+const genCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 6);
+
+const RATE_LIMITS = {
+  createSession: { max: 5, windowMs: 60_000 },
+  joinSession: { max: 20, windowMs: 60_000 },
+  reportBadPrompt: { max: 6, windowMs: 60_000 },
+};
+const DEFAULT_EVENT_PAYLOAD_MAX_BYTES = 16 * 1024;
+const LARGER_EVENT_PAYLOAD_MAX_BYTES = 128 * 1024;
+const PHOTO_EVENT_PAYLOAD_MAX_BYTES = 7 * 1024 * 1024;
+const SOCKET_EVENT_PAYLOAD_LIMITS = {
+  submit_photo: PHOTO_EVENT_PAYLOAD_MAX_BYTES,
+  submit_answers: LARGER_EVENT_PAYLOAD_MAX_BYTES,
+};
+const requestBuckets = new Map();
+const textEncoder = new TextEncoder();
+
+function clientAddress(socket) {
+  return String(socket?.handshake?.address || "unknown");
+}
+
+function allowByRateLimit(socket, action, cfg) {
+  const ip = clientAddress(socket);
+  const now = Date.now();
+  const key = `${ip}:${action}`;
+  const bucket = requestBuckets.get(key) || { count: 0, resetAt: now + cfg.windowMs };
+  if (now > bucket.resetAt) {
+    bucket.count = 0;
+    bucket.resetAt = now + cfg.windowMs;
+  }
+  bucket.count += 1;
+  requestBuckets.set(key, bucket);
+  return bucket.count <= cfg.max;
+}
+
+function isPlainObject(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function payloadBytes(value) {
+  try {
+    return textEncoder.encode(JSON.stringify(value)).length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+function clampStringInput(value, opts = {}) {
+  const {
+    minLen = 0,
+    maxLen = 128,
+    trim = true,
+    uppercase = false,
+    pattern = null,
+  } = opts;
+  if (typeof value !== "string") return null;
+  let out = trim ? value.trim() : value;
+  if (uppercase) out = out.toUpperCase();
+  if (out.length < minLen || out.length > maxLen) return null;
+  if (pattern && !pattern.test(out)) return null;
+  return out;
+}
+
+function clampIntInput(value, opts = {}) {
+  const { min = Number.MIN_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER } = opts;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) return null;
+  return n;
+}
 
 /** Sentinel player id so `sessionSnapshot` can build an observer-style state for projectors. */
 const PROJECTOR_SENTINEL_ID = "__projector__";
@@ -90,24 +161,6 @@ function shuffle(arr) {
   return a;
 }
 
-function buildUniqueAlternatePrompts(gamePrompts) {
-  const primaryKeys = new Set(
-    (gamePrompts || []).map((p) => String(p?.text ?? "").trim().toLowerCase())
-  );
-  // Alternates must be built-in only (never custom), and must not repeat.
-  const pool = shuffle(
-    HARDCODED_PROMPTS.filter((t) => !primaryKeys.has(String(t).trim().toLowerCase()))
-  );
-
-  const out = {};
-  const n = gamePrompts?.length ?? 0;
-  for (let i = 0; i < n; i++) {
-    const key = String(i);
-    out[key] = pool.pop() || "";
-  }
-  return out;
-}
-
 function publicPromptAltState(sess) {
   const out = {};
   const n = sess?.gamePrompts?.length ?? 0;
@@ -126,7 +179,7 @@ function publicPromptAltState(sess) {
 
 const app = express();
 app.use(cors({ origin: CLIENT_ORIGIN }));
-app.use(express.json());
+app.use(express.json({ limit: "32kb", strict: true }));
 
 /** @type {Map<string, object>} */
 const sessions = new Map();
@@ -214,6 +267,7 @@ function sessionSnapshot(sess, forPlayerId) {
   const n = sess.gamePrompts.length;
   const promptsMeta = sess.gamePrompts.map((p, i) => ({
     index: i,
+    id: p.id,
     text: p.text,
     authorIds: sess.assignments[i].authorIds,
   }));
@@ -719,16 +773,16 @@ function clearAllGameTimers(sess) {
  * Rebuild prompts, assignments, answering timers, and showdown queue.
  * @param {{ resetScores: boolean }} opts
  */
-function setupTextRoundAnswering(sess, opts) {
+async function setupTextRoundAnswering(sess, opts) {
   const { resetScores } = opts;
   const n = sess.players.length;
-  const pool = buildGamePrompts(n, sess.customPrompts || []);
+  const pool = await buildGamePrompts(n, sess.customPrompts || []);
   const playerIds = sess.players.map((p) => p.id);
   const assignments = buildAssignments(playerIds);
   sess.gamePrompts = pool.map((p) => ({ id: p.id, text: p.text }));
   sess.assignments = assignments;
   sess.answers = {};
-  sess.alternatePrompts = buildUniqueAlternatePrompts(sess.gamePrompts);
+  sess.alternatePrompts = await buildAlternatePromptMap(sess.gamePrompts);
   sess.promptAltRequestedBy = {};
   sess.promptAltSwapped = {};
   sess.promptAltLocked = {};
@@ -798,16 +852,16 @@ function setupTextRoundAnswering(sess, opts) {
 }
 
 /** New game / play again: text round 1 from scratch. */
-function commenceAnsweringPhase(sess) {
+async function commenceAnsweringPhase(sess) {
   clearPlayAgainTimer(sess);
   sess.textRoundNumber = 1;
-  setupTextRoundAnswering(sess, { resetScores: true });
+  await setupTextRoundAnswering(sess, { resetScores: true });
 }
 
 /** After round 1 leaderboard: same format as round 1 but doubled showdown points. */
-function commenceSecondTextRound(sess) {
+async function commenceSecondTextRound(sess) {
   sess.textRoundNumber = 2;
-  setupTextRoundAnswering(sess, { resetScores: false });
+  await setupTextRoundAnswering(sess, { resetScores: false });
 }
 
 function setWinnerFromScores(sess) {
@@ -1028,12 +1082,19 @@ function startRound2TextSplash(sess) {
   clearRound2TextSplashTimer(sess);
   sess.phase = "round2_text_splash";
   const code = sess.code;
-  sess._round2TextSplashTimer = setTimeout(() => {
+  sess._round2TextSplashTimer = setTimeout(async () => {
     const s = sessions.get(code);
     if (!s || s.phase !== "round2_text_splash") return;
     s._round2TextSplashTimer = null;
-    commenceSecondTextRound(s);
-    broadcastSession(s);
+    try {
+      await commenceSecondTextRound(s);
+      broadcastSession(s);
+    } catch (e) {
+      console.error("[round2_text_splash]", e);
+      s.phase = "ended";
+      setWinnerFromScores(s);
+      broadcastSession(s);
+    }
   }, ROUND2_TEXT_SPLASH_MS);
 }
 
@@ -1398,13 +1459,38 @@ function advanceShowdown(sess) {
 function startServer() {
   const server = http.createServer(app);
   const io = new Server(server, {
+    maxHttpBufferSize: PHOTO_EVENT_PAYLOAD_MAX_BYTES,
     cors: { origin: CLIENT_ORIGIN, methods: ["GET", "POST"] },
   });
   globalThis.__io = io;
 
   io.on("connection", (socket) => {
-    socket.on("create_session", ({ hostName } = {}, cb) => {
-      const name = String(hostName || "Host").slice(0, 24) || "Host";
+    socket.use((packet, next) => {
+      const [eventName, payload] = packet;
+      if (typeof eventName !== "string") {
+        return next(new Error("Invalid event."));
+      }
+      if (payload !== undefined && !isPlainObject(payload)) {
+        return next(new Error("Payload must be an object."));
+      }
+      const maxBytes =
+        SOCKET_EVENT_PAYLOAD_LIMITS[eventName] ?? DEFAULT_EVENT_PAYLOAD_MAX_BYTES;
+      if (payloadBytes(payload) > maxBytes) {
+        return next(new Error("Payload too large."));
+      }
+      return next();
+    });
+
+    socket.on("create_session", (payload = {}, cb) => {
+      if (!allowByRateLimit(socket, "create_session", RATE_LIMITS.createSession)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Too many requests. Try again soon." });
+        return;
+      }
+      if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+        if (typeof cb === "function") cb({ ok: false, error: "Server is full. Try again later." });
+        return;
+      }
+      const name = clampStringInput(payload.hostName, { maxLen: 24 }) || "Host";
       let code = genCode();
       while (sessions.has(code)) code = genCode();
       const hostPlayerId = nanoid(12);
@@ -1432,16 +1518,28 @@ function startServer() {
       socket.emit("session_state", sessionSnapshot(sess, hostPlayerId));
     });
 
-    socket.on("join_session", ({ code, name } = {}, cb) => {
+    socket.on("join_session", (payload = {}, cb) => {
+      if (!allowByRateLimit(socket, "join_session", RATE_LIMITS.joinSession)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Too many requests. Try again soon." });
+        return;
+      }
       if (findProjectorBySocket(socket.id)) {
         if (typeof cb === "function") {
           cb({ ok: false, error: "Disconnect the projector tab before joining as a player." });
         }
         return;
       }
-      const c = String(code || "")
-        .toUpperCase()
-        .trim();
+      const c = clampStringInput(payload.code, {
+        minLen: 6,
+        maxLen: 6,
+        trim: true,
+        uppercase: true,
+        pattern: /^[A-Z2-9]{6}$/,
+      });
+      if (!c) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid session code format." });
+        return;
+      }
       const sess = findSessionByCode(c);
       if (!sess) {
         if (typeof cb === "function") cb({ ok: false, error: "Session not found." });
@@ -1451,7 +1549,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Game already started." });
         return;
       }
-      const playerName = String(name || "Player").slice(0, 24) || "Player";
+      const playerName = clampStringInput(payload.name, { maxLen: 24 }) || "Player";
       if (sess.players.some((p) => p.name.toLowerCase() === playerName.toLowerCase())) {
         if (typeof cb === "function") cb({ ok: false, error: "Name already taken." });
         return;
@@ -1479,16 +1577,28 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("join_projector", ({ code } = {}, cb) => {
+    socket.on("join_projector", (payload = {}, cb) => {
       if (findPlayerBySocket(socket.id)) {
         if (typeof cb === "function") {
           cb({ ok: false, error: "Leave the player session before opening projector mode." });
         }
         return;
       }
-      const c = String(code || "")
-        .toUpperCase()
-        .trim();
+      const cRaw = payload.code;
+      const c =
+        cRaw == null || cRaw === ""
+          ? ""
+          : clampStringInput(cRaw, {
+              minLen: 6,
+              maxLen: 6,
+              trim: true,
+              uppercase: true,
+              pattern: /^[A-Z2-9]{6}$/,
+            });
+      if (cRaw && !c) {
+        if (typeof cb === "function") cb({ ok: false, error: "Invalid session code format." });
+        return;
+      }
       if (!c) {
         let newCode = genCode();
         while (sessions.has(newCode)) newCode = genCode();
@@ -1521,7 +1631,7 @@ function startServer() {
       socket.emit("session_state", sessionSnapshotForProjector(sess));
     });
 
-    socket.on("set_answer_time_limit", ({ seconds } = {}, cb) => {
+    socket.on("set_answer_time_limit", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1536,7 +1646,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Timer can only be changed in lobby." });
         return;
       }
-      const s = Number(seconds);
+      const s = clampIntInput(payload.seconds, { min: 1, max: 600 });
       if (!ANSWER_TIME_OPTIONS_SEC.includes(s)) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid timer option." });
         return;
@@ -1546,7 +1656,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("add_custom_prompt", ({ text } = {}, cb) => {
+    socket.on("add_custom_prompt", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1562,9 +1672,7 @@ function startServer() {
         return;
       }
       if (!sess.customPrompts) sess.customPrompts = [];
-      const t = String(text || "")
-        .trim()
-        .slice(0, MAX_PROMPT_TEXT_LEN);
+      const t = clampStringInput(payload.text, { maxLen: MAX_PROMPT_TEXT_LEN });
       if (!t) {
         if (typeof cb === "function") cb({ ok: false, error: "Prompt cannot be empty." });
         return;
@@ -1587,7 +1695,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("remove_custom_prompt", ({ index } = {}, cb) => {
+    socket.on("remove_custom_prompt", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1603,7 +1711,7 @@ function startServer() {
         return;
       }
       if (!sess.customPrompts) sess.customPrompts = [];
-      const i = Number(index);
+      const i = clampIntInput(payload.index, { min: 0, max: 10_000 });
       if (!Number.isInteger(i) || i < 0 || i >= sess.customPrompts.length) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
         return;
@@ -1613,7 +1721,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("start_game", (_, cb) => {
+    socket.on("start_game", async (_, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1639,7 +1747,7 @@ function startServer() {
       }
 
       try {
-        commenceAnsweringPhase(sess);
+        await commenceAnsweringPhase(sess);
       } catch (e) {
         if (typeof cb === "function") {
           cb({ ok: false, error: e.message || "Could not pick prompts." });
@@ -1682,12 +1790,12 @@ function startServer() {
       const code = sess.code;
       sess.phase = "play_again_transition";
       sess.playAgainEndsAt = Date.now() + PLAY_AGAIN_TRANSITION_MS;
-      sess._playAgainTimer = setTimeout(() => {
+      sess._playAgainTimer = setTimeout(async () => {
         const s = sessions.get(code);
         if (!s || s.phase !== "play_again_transition") return;
         s._playAgainTimer = null;
         try {
-          commenceAnsweringPhase(s);
+          await commenceAnsweringPhase(s);
         } catch (e) {
           console.error("[play_again]", e);
           s.phase = "ended";
@@ -1771,7 +1879,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("submit_answers", ({ answers } = {}, cb) => {
+    socket.on("submit_answers", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1782,13 +1890,19 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
         return;
       }
+      const rawAnswers = payload.answers;
+      if (!isPlainObject(rawAnswers)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Malformed answers payload." });
+        return;
+      }
       const mine = new Set(
         sess.assignments
           .filter((a) => a.authorIds.includes(player.id))
           .map((a) => String(a.promptIndex))
       );
       for (const key of mine) {
-        const text = String(answers?.[key] ?? "").slice(0, 50);
+        const raw = rawAnswers?.[key];
+        const text = typeof raw === "string" ? raw.slice(0, 50) : "";
         if (!sess.answers[key]) sess.answers[key] = {};
         sess.answers[key][player.id] = text;
       }
@@ -1805,7 +1919,74 @@ function startServer() {
       }
     });
 
-    socket.on("request_alternate_prompt", ({ promptIndex } = {}, cb) => {
+    socket.on("report_bad_prompt", async (payload = {}, cb) => {
+      if (!allowByRateLimit(socket, "report_bad_prompt", RATE_LIMITS.reportBadPrompt)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Too many reports. Try again soon." });
+        return;
+      }
+      const found = findPlayerBySocket(socket.id);
+      if (!found) {
+        if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
+        return;
+      }
+      const { sess, player } = found;
+
+      let idToReport = clampStringInput(payload.promptId, {
+        minLen: 1,
+        maxLen: 32,
+        trim: true,
+        pattern: /^[a-zA-Z0-9_-]+$/,
+      }) || "";
+      if (!idToReport) {
+        const i = clampIntInput(payload.promptIndex, { min: 0, max: 10_000 });
+        if (
+          Number.isInteger(i) &&
+          i >= 0 &&
+          i < (sess.gamePrompts?.length || 0) &&
+          sess.gamePrompts[i]?.id != null
+        ) {
+          idToReport = String(sess.gamePrompts[i].id);
+        }
+      }
+      if (!idToReport) {
+        if (typeof cb === "function") cb({ ok: false, error: "No prompt id to report." });
+        return;
+      }
+      if (idToReport.startsWith("custom-")) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: "Custom prompts are not stored in the prompt database." });
+        }
+        return;
+      }
+
+      try {
+        const result = await reportPrompt(idToReport, player.id);
+        if (!result.ok) {
+          if (typeof cb === "function") {
+            const err =
+              result.reason === "already_reported"
+                ? "You already reported this prompt."
+                : "Prompt not found.";
+            cb({ ok: false, error: err });
+          }
+          return;
+        }
+        if (typeof cb === "function") {
+          cb({
+            ok: true,
+            promptId: result.id,
+            reportCount: result.reportCount,
+            isDeleted: result.isDeleted,
+          });
+        }
+      } catch (e) {
+        if (typeof cb === "function") {
+          cb({ ok: false, error: e.message || "Could not report prompt." });
+        }
+      }
+    });
+
+    socket.on("request_alternate_prompt", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1816,7 +1997,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
         return;
       }
-      const i = Number(promptIndex);
+      const i = clampIntInput(payload.promptIndex, { min: 0, max: 10_000 });
       if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
         return;
@@ -1862,7 +2043,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("accept_alternate_prompt", ({ promptIndex } = {}, cb) => {
+    socket.on("accept_alternate_prompt", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1873,7 +2054,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
         return;
       }
-      const i = Number(promptIndex);
+      const i = clampIntInput(payload.promptIndex, { min: 0, max: 10_000 });
       if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
         return;
@@ -1912,7 +2093,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("reject_alternate_prompt", ({ promptIndex } = {}, cb) => {
+    socket.on("reject_alternate_prompt", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1923,7 +2104,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Not in answer phase." });
         return;
       }
-      const i = Number(promptIndex);
+      const i = clampIntInput(payload.promptIndex, { min: 0, max: 10_000 });
       if (!Number.isInteger(i) || i < 0 || i >= sess.gamePrompts.length) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid prompt index." });
         return;
@@ -1967,7 +2148,7 @@ function startServer() {
       broadcastSession(sess);
     });
 
-    socket.on("submit_photo", ({ photoDataUrl } = {}, cb) => {
+    socket.on("submit_photo", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -1982,7 +2163,11 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
         return;
       }
-      const encoded = String(photoDataUrl || "").trim();
+      if (typeof payload.photoDataUrl !== "string") {
+        if (typeof cb === "function") cb({ ok: false, error: "Malformed photo payload." });
+        return;
+      }
+      const encoded = payload.photoDataUrl.trim();
       if (!encoded.startsWith("data:image/")) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid photo format." });
         return;
@@ -2003,7 +2188,7 @@ function startServer() {
       }
     });
 
-    socket.on("submit_photo_caption", ({ caption } = {}, cb) => {
+    socket.on("submit_photo_caption", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -2018,7 +2203,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
         return;
       }
-      const text = String(caption || "").slice(0, 160);
+      const text = typeof payload.caption === "string" ? payload.caption.slice(0, 160) : "";
       sess.photoRound.captions[player.id] = text;
       if (!sess.photoRound.captionSubmittedBy.includes(player.id)) {
         sess.photoRound.captionSubmittedBy.push(player.id);
@@ -2031,7 +2216,7 @@ function startServer() {
       }
     });
 
-    socket.on("submit_photo_rank_vote", ({ rank, number } = {}, cb) => {
+    socket.on("submit_photo_rank_vote", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -2047,12 +2232,13 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Photo round is not initialized." });
         return;
       }
+      const rank = payload.rank;
       const rankKey = rank === "first" || rank === "second" || rank === "third" ? rank : null;
       if (!rankKey) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid rank (use third, second, or first)." });
         return;
       }
-      const choice = Number(number);
+      const choice = clampIntInput(payload.number, { min: 1, max: 10_000 });
       const validChoices = new Set((pr.pairings || []).map((p) => p.number));
       if (!validChoices.has(choice)) {
         if (typeof cb === "function") cb({ ok: false, error: "Invalid choice." });
@@ -2078,7 +2264,7 @@ function startServer() {
       }
     });
 
-    socket.on("vote", ({ choice } = {}, cb) => {
+    socket.on("vote", (payload = {}, cb) => {
       const found = findPlayerBySocket(socket.id);
       if (!found) {
         if (typeof cb === "function") cb({ ok: false, error: "Not in a session." });
@@ -2111,7 +2297,7 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Authors cannot vote." });
         return;
       }
-      const c = choice === "B" ? "B" : "A";
+      const c = payload.choice === "B" ? "B" : "A";
       const qi = sess.currentQueueIndex;
       if (!sess.showdownVotes[qi]) sess.showdownVotes[qi] = {};
       sess.showdownVotes[qi][player.id] = c;
