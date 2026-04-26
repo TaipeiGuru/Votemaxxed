@@ -1388,9 +1388,9 @@ export default function App() {
         <div className="card photo-rank-vote-card">
           <h2>Rank the pairings</h2>
           {[
-            { rank: "third", label: "3rd favorite" },
-            { rank: "second", label: "2nd favorite" },
-            { rank: "first", label: "1st favorite" },
+            { rank: "first", label: "1st place" },
+            { rank: "second", label: "2nd place" },
+            { rank: "third", label: "3rd place" },
           ].map(({ rank, label }) => {
             const votes = photoRound?.myVotes || {};
             return (

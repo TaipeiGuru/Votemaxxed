@@ -23,7 +23,7 @@ export const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
 /** How long the projector shows each pairing in `photo_distribution`. */
 export const PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS = 5000;
 /** Mid-game scoreboard duration (after text round 1 and after doubled text round 2). */
-export const ROUND1_LEADERBOARD_MS = 15000;
+export const ROUND1_LEADERBOARD_MS = 10000;
 /** Splash after round 1 leaderboard, before round 2 answering (double points). */
 export const ROUND2_TEXT_SPLASH_MS = 3000;
 /** Full-screen pause before photo uploads (after text rounds). */
