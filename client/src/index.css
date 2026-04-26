@@ -104,9 +104,9 @@ label {
 
 .player-answering-timer {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 0.65rem);
-  right: calc(env(safe-area-inset-right, 0px) + 0.65rem);
-  z-index: 95;
+  top: max(0.65rem, calc(env(safe-area-inset-top, 0px) + 1dvh));
+  right: max(0.65rem, calc(env(safe-area-inset-right, 0px) + 0.65rem));
+  z-index: 9999;
   margin: 0;
   padding: 0.38rem 0.62rem;
   border-radius: 999px;
@@ -119,6 +119,7 @@ label {
   font-variant-numeric: tabular-nums;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.34);
   pointer-events: none;
+  transform: translateZ(0);
 }
 
 .player-answering-timer--danger {
