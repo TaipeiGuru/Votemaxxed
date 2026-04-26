@@ -1401,7 +1401,7 @@ export default function App() {
 
       {session && !isProjector && photoVoting && (
         <div className="card photo-rank-vote-card">
-          <h2>Rank the pairings</h2>
+          <h2>Rank the submissions</h2>
           {[
             { rank: "first", label: "1st place" },
             { rank: "second", label: "2nd place" },
