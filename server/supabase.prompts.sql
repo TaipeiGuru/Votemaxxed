@@ -68,13 +68,13 @@ begin
   end if;
 
   return query
-  update prompts
+  update prompts as p
   set
-    report_count = report_count + 1,
-    is_deleted = (report_count + 1) >= 5
-  where prompts.id = p_prompt_id
-    and prompts.is_deleted = false
-  returning prompts.id, prompts.text, prompts.report_count, prompts.is_deleted;
+    report_count = p.report_count + 1,
+    is_deleted = (p.report_count + 1) >= 5
+  where p.id = p_prompt_id
+    and p.is_deleted = false
+  returning p.id, p.text, p.report_count, p.is_deleted;
 end;
 $$;
 

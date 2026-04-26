@@ -20,8 +20,10 @@ export const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
 /** Max time photo-round rank voting stays open; early finish when all ballots are complete. */
 export const PHOTO_VOTING_DURATION_MS = 30000;
 export const PHOTO_DISTRIBUTION_REVIEW_MS = 7000;
-/** How long the projector shows each pairing in `photo_distribution`. */
-export const PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS = 5000;
+/** How long each photo-caption pairing stays on projector during carousel reveal. */
+export const PHOTO_DISTRIBUTION_CAROUSEL_PER_PAIRING_MS = 5000;
+/** How long the all-pairings projector grid stays visible after carousel reveal. */
+export const PHOTO_DISTRIBUTION_GRID_VISIBLE_MS = 5000;
 /** Mid-game scoreboard duration (after text round 1 and after doubled text round 2). */
 export const ROUND1_LEADERBOARD_MS = 10000;
 /** Splash after round 1 leaderboard, before round 2 answering (double points). */

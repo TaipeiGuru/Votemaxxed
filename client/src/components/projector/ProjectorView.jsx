@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { PlayerElement } from "../../PlayerElement.jsx";
 import {
   ProjectorDualAnswerColumns,
@@ -9,6 +10,12 @@ export function ProjectorView({
   showVoteDistribution,
   answerTimeRemainingSec,
 }) {
+  const getPairingGridShape = (count) => {
+    const total = Math.max(1, Number(count) || 1);
+    if (total <= 5) return { cols: total, rows: 1 };
+    return { cols: Math.ceil(total / 2), rows: 2 };
+  };
+
   const code = session?.code ?? "";
   const lobby = session?.phase === "lobby";
   const answering = session?.phase === "answering";
@@ -17,6 +24,8 @@ export function ProjectorView({
   const photoCaptionTransition = session?.phase === "photo_caption_transition";
   const photoCaptioning = session?.phase === "photo_captioning";
   const photoVoteLoading = session?.phase === "photo_vote_loading";
+  const photoVoteCarousel = session?.phase === "photo_vote_carousel";
+  const photoVotePreview = session?.phase === "photo_vote_preview";
   const photoVoting = session?.phase === "photo_voting";
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
@@ -31,20 +40,13 @@ export function ProjectorView({
   const progress = session?.answerProgress ?? { done: [], waiting: [] };
   const photoRound = session?.photoRound ?? null;
   const photoVotePairings = photoRound?.pairings || [];
-  const photoVoteGridCols = Math.max(1, Math.ceil(Math.sqrt(photoVotePairings.length || 1)));
-  const photoVoteGridRows = Math.max(
-    1,
-    Math.ceil((photoVotePairings.length || 1) / photoVoteGridCols)
-  );
+  const photoVoteGridShape = getPairingGridShape(photoVotePairings.length);
+  const photoVoteGridCols = photoVoteGridShape.cols;
+  const photoVoteGridRows = photoVoteGridShape.rows;
   const photoDistributionPairings = photoRound?.distribution?.pairings || [];
-  const photoDistributionGridCols = Math.max(
-    1,
-    Math.ceil(Math.sqrt(photoDistributionPairings.length || 1))
-  );
-  const photoDistributionGridRows = Math.max(
-    1,
-    Math.ceil((photoDistributionPairings.length || 1) / photoDistributionGridCols)
-  );
+  const photoDistributionGridShape = getPairingGridShape(photoDistributionPairings.length);
+  const photoDistributionGridCols = photoDistributionGridShape.cols;
+  const photoDistributionGridRows = photoDistributionGridShape.rows;
 
   const breakdownVisible = !!session?.lastResult?.voteBreakdown && showVoteDistribution;
 
@@ -58,6 +60,22 @@ export function ProjectorView({
       : null;
 
   const projectorHeaderMatchPlayer = photoDistributionLoading;
+  const [carouselNowMs, setCarouselNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!photoVoteCarousel) return undefined;
+    const id = setInterval(() => setCarouselNowMs(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [photoVoteCarousel]);
+
+  const carouselPerPairingMs = Math.max(1, Number(photoRound?.voteCarousel?.perPairingMs || 3500));
+  const carouselStartedAt = Number(photoRound?.voteCarousel?.startedAt || 0);
+  const carouselElapsedMs = carouselStartedAt > 0 ? Math.max(0, carouselNowMs - carouselStartedAt) : 0;
+  const carouselIndex = Math.min(
+    Math.max(0, photoVotePairings.length - 1),
+    Math.floor(carouselElapsedMs / carouselPerPairingMs)
+  );
+  const activeCarouselPairing = photoVotePairings[carouselIndex] || null;
 
   return (
     <div className="projector-root">
@@ -354,17 +372,72 @@ export function ProjectorView({
         </div>
       )}
 
+      {photoVoteCarousel && activeCarouselPairing && (
+        <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
+          <div className="projector-photo-grid projector-photo-grid--vote-fit">
+            <article className="projector-photo-card projector-photo-card--vote-fit projector-photo-card--carousel">
+              <p className="projector-photo-number">#{activeCarouselPairing.number}</p>
+              <div className="projector-photo-carousel-body">
+                <div className="projector-photo-carousel-media">
+                  {activeCarouselPairing.photoDataUrl ? (
+                    <img
+                      src={activeCarouselPairing.photoDataUrl}
+                      alt={`Pairing ${activeCarouselPairing.number}`}
+                    />
+                  ) : (
+                    <div className="projector-photo-placeholder">No photo uploaded</div>
+                  )}
+                </div>
+                <p className="projector-photo-caption projector-photo-caption--carousel">
+                  {activeCarouselPairing.captionText || "No caption submitted"}
+                </p>
+              </div>
+            </article>
+          </div>
+        </div>
+      )}
+
+      {photoVotePreview && (
+        <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
+          <div
+            className="projector-photo-grid projector-photo-grid--vote-fit projector-photo-grid--square"
+            style={{
+              "--vote-grid-cols": photoVoteGridCols,
+              "--vote-grid-rows": photoVoteGridRows,
+            }}
+          >
+            {photoVotePairings.map((pairing) => (
+              <article
+                key={pairing.number}
+                className="projector-photo-card projector-photo-card--vote-fit projector-photo-card--square"
+              >
+                <p className="projector-photo-number">#{pairing.number}</p>
+                {pairing.photoDataUrl ? (
+                  <img src={pairing.photoDataUrl} alt={`Pairing ${pairing.number}`} />
+                ) : (
+                  <div className="projector-photo-placeholder">No photo uploaded</div>
+                )}
+                <p className="projector-photo-caption">{pairing.captionText || "No caption submitted"}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
       {photoDistribution && (
         <div className="projector-card projector-photo-round projector-photo-round--vote-fit">
           <div
-            className="projector-photo-grid projector-photo-grid--vote-fit"
+            className="projector-photo-grid projector-photo-grid--vote-fit projector-photo-grid--square"
             style={{
               "--vote-grid-cols": photoDistributionGridCols,
               "--vote-grid-rows": photoDistributionGridRows,
             }}
           >
             {photoDistributionPairings.map((pairing) => (
-              <article key={pairing.number} className="projector-photo-card projector-photo-card--vote-fit">
+              <article
+                key={pairing.number}
+                className="projector-photo-card projector-photo-card--vote-fit projector-photo-card--square"
+              >
                 <p className="projector-photo-number">
                   #{pairing.number} - {Number(pairing.points || 0).toFixed(1)} pts
                 </p>

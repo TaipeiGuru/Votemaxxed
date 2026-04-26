@@ -1,5 +1,6 @@
 import {
   DEFAULT_ANSWER_TIME_SEC,
+  PHOTO_DISTRIBUTION_CAROUSEL_PER_PAIRING_MS,
   SHOWDOWN_PASSES,
   showdownPointMultiplier,
 } from "./constants.js";
@@ -54,6 +55,8 @@ function isPhotoRoundPhase(phase) {
     phase === "photo_caption_transition" ||
     phase === "photo_captioning" ||
     phase === "photo_vote_loading" ||
+    phase === "photo_vote_carousel" ||
+    phase === "photo_vote_preview" ||
     phase === "photo_distribution_loading" ||
     phase === "photo_voting" ||
     phase === "photo_distribution"
@@ -170,12 +173,14 @@ export function sessionSnapshot(sess, forPlayerId) {
     };
   }
 
-  const n = sess.gamePrompts.length;
-  const promptsMeta = sess.gamePrompts.map((p, i) => ({
+  const gamePrompts = Array.isArray(sess.gamePrompts) ? sess.gamePrompts : [];
+  const assignments = Array.isArray(sess.assignments) ? sess.assignments : [];
+  const n = gamePrompts.length;
+  const promptsMeta = gamePrompts.map((p, i) => ({
     index: i,
     id: p.id,
     text: p.text,
-    authorIds: sess.assignments[i].authorIds,
+    authorIds: assignments[i]?.authorIds || [],
   }));
   const myPrompts = promptsMeta.filter((p) => p.authorIds.includes(forPlayerId));
   const answersMine = {};
@@ -265,6 +270,8 @@ export function sessionSnapshot(sess, forPlayerId) {
         myAssignedPhoto:
           sess.phase === "photo_captioning" ||
           sess.phase === "photo_vote_loading" ||
+          sess.phase === "photo_vote_carousel" ||
+          sess.phase === "photo_vote_preview" ||
           sess.phase === "photo_distribution_loading" ||
           sess.phase === "photo_voting" ||
           sess.phase === "photo_distribution"
@@ -279,9 +286,15 @@ export function sessionSnapshot(sess, forPlayerId) {
           first: myVoteState.first ?? null,
         },
         pairings: isProjectorViewer && sess.phase !== "photo_upload" ? pairingsPublic : [],
-        distribution:
-          isProjectorViewer && sess.phase === "photo_distribution"
-            ? { pairings: distributionSorted }
+        distribution: isProjectorViewer && sess.phase === "photo_distribution"
+          ? { pairings: distributionSorted }
+          : null,
+        voteCarousel:
+          isProjectorViewer && sess.phase === "photo_vote_carousel"
+            ? {
+                startedAt: Number(pr.voteCarouselStartedAt || 0) || null,
+                perPairingMs: PHOTO_DISTRIBUTION_CAROUSEL_PER_PAIRING_MS,
+              }
             : null,
       },
       lastResult: publicLastResult(sess.lastShowdownResult),
@@ -330,7 +343,7 @@ export function sessionSnapshot(sess, forPlayerId) {
         passNumber: Math.floor(queueIndex / n) + 1,
         passesTotal: SHOWDOWN_PASSES,
         promptIndex,
-        promptText: sess.gamePrompts[promptIndex].text,
+        promptText: gamePrompts[promptIndex]?.text || "",
         answerA,
         answerB,
         authorA: authors[0],

@@ -27,8 +27,9 @@ import {
   NEXT_VOTE_SPLASH_MS,
   OVERLAY_BEFORE_REVIEW_MS,
   PHOTO_CAPTION_TO_VOTE_LOADING_MS,
+  PHOTO_DISTRIBUTION_CAROUSEL_PER_PAIRING_MS,
+  PHOTO_DISTRIBUTION_GRID_VISIBLE_MS,
   PHOTO_DISTRIBUTION_REVIEW_MS,
-  PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS,
   PHOTO_EVENT_PAYLOAD_MAX_BYTES,
   PHOTO_ROUND_SPLASH_MS,
   PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS,
@@ -201,6 +202,14 @@ function clearPhotoRoundTimers(sess) {
   if (sess._photoVoteLoadingTimer) {
     clearTimeout(sess._photoVoteLoadingTimer);
     sess._photoVoteLoadingTimer = null;
+  }
+  if (sess._photoVoteCarouselTimer) {
+    clearTimeout(sess._photoVoteCarouselTimer);
+    sess._photoVoteCarouselTimer = null;
+  }
+  if (sess._photoVotePreviewTimer) {
+    clearTimeout(sess._photoVotePreviewTimer);
+    sess._photoVotePreviewTimer = null;
   }
   if (sess._photoDistributionTimer) {
     clearTimeout(sess._photoDistributionTimer);
@@ -380,6 +389,7 @@ function initPhotoRoundState(sess) {
     captionSubmittedBy: [],
     captionEndsAt: null,
     voteEndsAt: null,
+    voteCarouselStartedAt: null,
     pairings,
     rankedVotes: {},
   };
@@ -423,17 +433,28 @@ function startPhotoVoting(sess) {
   const pr = sess.photoRound;
   if (!pr) return;
   clearPhotoVoteTimer(sess);
-  sess.phase = "photo_voting";
   const code = sess.code;
-  const ms = PHOTO_VOTING_DURATION_MS;
-  pr.voteEndsAt = Date.now() + ms;
-  sess._photoVoteTimer = setTimeout(() => {
-    const s = sessions.get(code);
-    if (!s || s.phase !== "photo_voting") return;
-    s._photoVoteTimer = null;
-    finalizePhotoVotingAndScore(s);
-  }, ms);
+  const carouselVisibleMs =
+    (pr.pairings?.length || 0) * PHOTO_DISTRIBUTION_CAROUSEL_PER_PAIRING_MS;
+  sess.phase = "photo_vote_carousel";
+  pr.voteCarouselStartedAt = Date.now();
   broadcastSession(sess);
+  sess._photoVoteCarouselTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s || s.phase !== "photo_vote_carousel") return;
+    s._photoVoteCarouselTimer = null;
+    if (s.photoRound) s.photoRound.voteCarouselStartedAt = null;
+    s.phase = "photo_voting";
+    const ms = PHOTO_VOTING_DURATION_MS;
+    if (s.photoRound) s.photoRound.voteEndsAt = Date.now() + ms;
+    broadcastSession(s);
+    s._photoVoteTimer = setTimeout(() => {
+      const s2 = sessions.get(code);
+      if (!s2 || s2.phase !== "photo_voting") return;
+      s2._photoVoteTimer = null;
+      finalizePhotoVotingAndScore(s2);
+    }, ms);
+  }, carouselVisibleMs);
 }
 
 function finalizePhotoVotingAndScore(sess) {
@@ -457,9 +478,8 @@ function finalizePhotoVotingAndScore(sess) {
     sess.scores[pairing.captionerId] = (sess.scores[pairing.captionerId] || 0) + split;
   }
   const code = sess.code;
-  const photoDistributionVisibleMs =
-    (pr.pairings?.length || 0) * PHOTO_DISTRIBUTION_VISIBLE_PER_PAIRING_MS;
   sess.phase = "photo_distribution_loading";
+  pr.voteCarouselStartedAt = null;
   broadcastSession(sess);
   sess._photoDistributionTimer = setTimeout(() => {
     const s = sessions.get(code);
@@ -467,21 +487,21 @@ function finalizePhotoVotingAndScore(sess) {
     s._photoDistributionTimer = null;
     s.phase = "photo_distribution";
     broadcastSession(s);
-    s._photoEndTransitionTimer = setTimeout(() => {
+    s._photoFinalEndTimer = setTimeout(() => {
       const s2 = sessions.get(code);
       if (!s2 || s2.phase !== "photo_distribution") return;
-      s2._photoEndTransitionTimer = null;
+      s2._photoFinalEndTimer = null;
       s2.phase = "final_results_transition";
       broadcastSession(s2);
       s2._finalResultsTransitionTimer = setTimeout(() => {
-        const s4 = sessions.get(code);
-        if (!s4 || s4.phase !== "final_results_transition") return;
-        s4._finalResultsTransitionTimer = null;
-        s4.phase = "ended";
-        setWinnerFromScores(s4);
-        broadcastSession(s4);
+        const s3 = sessions.get(code);
+        if (!s3 || s3.phase !== "final_results_transition") return;
+        s3._finalResultsTransitionTimer = null;
+        s3.phase = "ended";
+        setWinnerFromScores(s3);
+        broadcastSession(s3);
       }, FINAL_RESULTS_TRANSITION_MS);
-    }, photoDistributionVisibleMs);
+    }, PHOTO_DISTRIBUTION_GRID_VISIBLE_MS);
   }, PHOTO_DISTRIBUTION_REVIEW_MS);
 }
 

@@ -526,6 +526,8 @@ export default function App() {
   const photoCaptionTransition = session?.phase === "photo_caption_transition";
   const photoCaptioning = session?.phase === "photo_captioning";
   const photoVoteLoading = session?.phase === "photo_vote_loading";
+  const photoVoteCarousel = session?.phase === "photo_vote_carousel";
+  const photoVotePreview = session?.phase === "photo_vote_preview";
   const photoVoting = session?.phase === "photo_voting";
   const photoDistributionLoading = session?.phase === "photo_distribution_loading";
   const photoDistribution = session?.phase === "photo_distribution";
@@ -544,8 +546,11 @@ export default function App() {
     photoCaptionTransition ||
     photoCaptioning ||
     photoVoteLoading ||
+    photoVoteCarousel ||
+    photoVotePreview ||
     photoVoting ||
     photoDistributionLoading ||
+    photoDistribution ||
     finalResultsTransition ||
     playAgainTransition ||
     round1Scores ||
@@ -575,7 +580,9 @@ export default function App() {
       : null;
   const playerCount = session?.players?.length ?? 0;
   const canStartGame = playerCount >= 3 && playerCount <= 10;
-  const projectorVoteFit = isProjector && (photoVoting || photoDistribution);
+  const projectorVoteFit =
+    isProjector &&
+    (photoVoteCarousel || photoVotePreview || photoVoting || photoDistribution);
 
   const showVoteDistribution =
     session?.lastResult?.voteBreakdown &&

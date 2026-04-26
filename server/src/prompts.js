@@ -129,6 +129,11 @@ export async function reportPrompt(promptId, reporterKey) {
     p_reporter_key: reporter,
   });
   if (error) {
+    const message = String(error.message || "");
+    if (/report_count/i.test(message) && /ambiguous/i.test(message)) {
+      // Backward-compatible fallback for older/broken DB function definitions.
+      return await reportPromptFallback(supabase, idNum, reporter);
+    }
     throw new Error(`Failed to report prompt: ${error.message}`);
   }
 
@@ -149,5 +154,49 @@ export async function reportPrompt(promptId, reporterKey) {
     text: row.text,
     reportCount: row.report_count,
     isDeleted: row.is_deleted,
+  };
+}
+
+async function reportPromptFallback(supabase, promptId, reporterKey) {
+  const { error: insertErr } = await supabase
+    .from("prompt_reports")
+    .insert({ prompt_id: promptId, reporter_key: reporterKey });
+  if (insertErr) {
+    if (String(insertErr.code || "") === "23505") {
+      return { ok: false, reason: "already_reported" };
+    }
+    throw new Error(`Failed to insert prompt report: ${insertErr.message}`);
+  }
+
+  const { data: existing, error: readErr } = await supabase
+    .from("prompts")
+    .select("id,text,report_count,is_deleted")
+    .eq("id", promptId)
+    .limit(1)
+    .maybeSingle();
+  if (readErr) throw new Error(`Failed to fetch prompt for report update: ${readErr.message}`);
+  if (!existing || existing.is_deleted) return { ok: false, reason: "not_found_or_deleted" };
+
+  const nextCount = Number(existing.report_count || 0) + 1;
+  const { data: updated, error: updErr } = await supabase
+    .from("prompts")
+    .update({
+      report_count: nextCount,
+      is_deleted: nextCount >= 5,
+    })
+    .eq("id", promptId)
+    .eq("is_deleted", false)
+    .select("id,text,report_count,is_deleted")
+    .limit(1)
+    .maybeSingle();
+  if (updErr) throw new Error(`Failed to update prompt report count: ${updErr.message}`);
+  if (!updated) return { ok: false, reason: "not_found_or_deleted" };
+
+  return {
+    ok: true,
+    id: updated.id,
+    text: updated.text,
+    reportCount: updated.report_count,
+    isDeleted: updated.is_deleted,
   };
 }
