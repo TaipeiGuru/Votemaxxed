@@ -613,6 +613,11 @@ export default function App() {
   const answerTimeLimitSec = session?.answerTimeLimitSec ?? 75;
   const answerTimeRemainingSec = Math.ceil(answerTimeLeftMs / 1000);
   const photoRound = session?.photoRound ?? null;
+  const showPlayerFloatingTimer =
+    !isProjector &&
+    ((answering && (answerPhaseTextRound === 1 || answerPhaseTextRound === 2)) ||
+      photoUpload ||
+      photoCaptioning);
   const onPhotoFileChange = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -731,6 +736,20 @@ export default function App() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {session && showPlayerFloatingTimer && (
+        <div
+          className={
+            answerTimeRemainingSec <= 10
+              ? "player-answering-timer player-answering-timer--danger"
+              : "player-answering-timer"
+          }
+          role="status"
+          aria-live="polite"
+        >
+          Time left: {answerTimeRemainingSec}s
         </div>
       )}
 
@@ -1076,15 +1095,6 @@ export default function App() {
       {session && !isProjector && answering && (
         <div className="card">
           <h2>Write your answers</h2>
-          <p
-            style={{
-              margin: "0.25rem 0 0.6rem",
-              fontWeight: 700,
-              color: answerTimeRemainingSec <= 10 ? "var(--danger)" : "var(--accent)",
-            }}
-          >
-            Time left: {answerTimeRemainingSec}s
-          </p>
           {altRejectWarning && (
             <p
               role="status"
@@ -1315,7 +1325,6 @@ export default function App() {
       {session && !isProjector && photoUpload && (
         <div className="card">
           <h2>Choose a funny photo</h2>
-          <p className="muted">Time left: {answerTimeRemainingSec}s</p>
           <input
             id="photo-upload"
             className="photo-upload-sr-only"
@@ -1350,7 +1359,6 @@ export default function App() {
       {session && !isProjector && photoCaptioning && (
         <div className="card">
           <h2>Give a funny caption</h2>
-          <p className="muted">Time left: {answerTimeRemainingSec}s</p>
           {photoRound?.myAssignedPhoto?.photoDataUrl ? (
             <img
               src={photoRound.myAssignedPhoto.photoDataUrl}

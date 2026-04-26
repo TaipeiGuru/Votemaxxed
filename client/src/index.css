@@ -102,6 +102,30 @@ label {
   padding: 1.5rem 1rem 3rem;
 }
 
+.player-answering-timer {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0.65rem);
+  right: calc(env(safe-area-inset-right, 0px) + 0.65rem);
+  z-index: 95;
+  margin: 0;
+  padding: 0.38rem 0.62rem;
+  border-radius: 999px;
+  border: 1px solid rgba(232, 197, 71, 0.55);
+  background: rgba(24, 28, 34, 0.92);
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.34);
+  pointer-events: none;
+}
+
+.player-answering-timer--danger {
+  color: var(--danger);
+  border-color: rgba(224, 93, 93, 0.55);
+}
+
 /* Player chip / pill (neutral white — palette can be swapped later) */
 .player-element {
   display: inline-flex;
