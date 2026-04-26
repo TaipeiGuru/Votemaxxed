@@ -74,6 +74,34 @@ export default function App() {
   const bothFoldStartTimerRef = useRef(null);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+
+    const syncViewportInsets = () => {
+      const topOffset = Math.max(0, Number(vv.offsetTop) || 0);
+      const rightInset = Math.max(
+        0,
+        (Number(window.innerWidth) || 0) - (Number(vv.width) || 0) - (Number(vv.offsetLeft) || 0)
+      );
+      root.style.setProperty("--vv-offset-top", `${topOffset}px`);
+      root.style.setProperty("--vv-inset-right", `${rightInset}px`);
+    };
+
+    syncViewportInsets();
+    vv.addEventListener("resize", syncViewportInsets);
+    vv.addEventListener("scroll", syncViewportInsets);
+    window.addEventListener("resize", syncViewportInsets);
+    return () => {
+      vv.removeEventListener("resize", syncViewportInsets);
+      vv.removeEventListener("scroll", syncViewportInsets);
+      window.removeEventListener("resize", syncViewportInsets);
+      root.style.setProperty("--vv-offset-top", "0px");
+      root.style.setProperty("--vv-inset-right", "0px");
+    };
+  }, []);
+
+  useEffect(() => {
     function onState(s) {
       if (s.phase === "gone") {
         setSession(null);

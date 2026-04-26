@@ -104,8 +104,14 @@ label {
 
 .player-answering-timer {
   position: fixed;
-  top: max(0.65rem, calc(env(safe-area-inset-top, 0px) + 1dvh));
-  right: max(0.65rem, calc(env(safe-area-inset-right, 0px) + 0.65rem));
+  top: max(
+    0.65rem,
+    calc(env(safe-area-inset-top, 0px) + var(--vv-offset-top, 0px) + 0.5dvh)
+  );
+  right: max(
+    0.65rem,
+    calc(env(safe-area-inset-right, 0px) + var(--vv-inset-right, 0px) + 0.65rem)
+  );
   z-index: 9999;
   margin: 0;
   padding: 0.38rem 0.62rem;
