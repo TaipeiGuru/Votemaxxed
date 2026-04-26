@@ -860,10 +860,6 @@ function advanceShowdown(sess) {
       winningAuthorName: sess.players.find((p) => p.id === winningAuthor)?.name ?? "?",
       winningAuthorId: winningAuthor,
     };
-    console.log("[MOG] (no DB) saved pair:", {
-      promptText,
-      winningAnswerText: winningAnswer,
-    });
   }
 
   let loserPlayerId = null;
