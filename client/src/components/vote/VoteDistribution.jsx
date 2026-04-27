@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PlayerElement } from "../../PlayerElement.jsx";
+import { playSfx } from "../../audio/engine.js";
 
 function projectorVoterChipEntries(voters) {
   if (!voters?.length) return [];
@@ -28,6 +29,14 @@ function formatShowdownPointsDelta(n) {
 function ProjectorColumnPointReveal({ base, mogBonus, alignEnd, animKey }) {
   const mog = Number(mogBonus) > 0;
   const total = (Number(base) || 0) + (Number(mogBonus) || 0);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      playSfx("kaching", { volume: 0.95 });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [animKey]);
+
   return (
     <div
       className={`projector-point-reveal${alignEnd ? " projector-point-reveal--end" : ""}`}

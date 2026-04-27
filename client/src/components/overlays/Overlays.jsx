@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-
-const MOGGED_SOUND_URL = `${import.meta.env.BASE_URL}audio/mogged.mp3`;
+import { duckBgm, playSfx } from "../../audio/engine.js";
 
 export function MogOverlay({ payload, onDone, playSound = false }) {
   const [pieces] = useState(() =>
@@ -20,9 +19,8 @@ export function MogOverlay({ payload, onDone, playSound = false }) {
 
   useEffect(() => {
     if (!payload || !playSound) return;
-    const audio = new Audio(MOGGED_SOUND_URL);
-    audio.volume = 0.9;
-    void audio.play().catch(() => {});
+    duckBgm({ targetVolume: 0.1, attackMs: 100, holdMs: 2400, releaseMs: 400 });
+    playSfx("mogged", { volume: 1, allowOverlap: false, ignoreMaster: true });
   }, [payload, playSound]);
 
   if (!payload) return null;

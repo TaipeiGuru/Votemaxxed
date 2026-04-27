@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PlayerElement } from "../../PlayerElement.jsx";
 import {
   ProjectorDualAnswerColumns,
@@ -9,6 +9,7 @@ export function ProjectorView({
   session,
   showVoteDistribution,
   answerTimeRemainingSec,
+  onCarouselPairingIndexChange,
 }) {
   const getPairingGridShape = (count) => {
     const total = Math.max(1, Number(count) || 1);
@@ -61,6 +62,7 @@ export function ProjectorView({
 
   const projectorHeaderMatchPlayer = photoDistributionLoading;
   const [carouselNowMs, setCarouselNowMs] = useState(() => Date.now());
+  const lastCarouselIndexRef = useRef(null);
 
   useEffect(() => {
     if (!photoVoteCarousel) return undefined;
@@ -76,6 +78,18 @@ export function ProjectorView({
     Math.floor(carouselElapsedMs / carouselPerPairingMs)
   );
   const activeCarouselPairing = photoVotePairings[carouselIndex] || null;
+
+  useEffect(() => {
+    if (!photoVoteCarousel || !activeCarouselPairing) {
+      lastCarouselIndexRef.current = null;
+      return;
+    }
+    if (lastCarouselIndexRef.current === carouselIndex) return;
+    lastCarouselIndexRef.current = carouselIndex;
+    if (typeof onCarouselPairingIndexChange === "function") {
+      onCarouselPairingIndexChange(carouselIndex, activeCarouselPairing);
+    }
+  }, [photoVoteCarousel, carouselIndex, activeCarouselPairing, onCarouselPairingIndexChange]);
 
   return (
     <div className="projector-root">
@@ -345,14 +359,17 @@ export function ProjectorView({
             Time left: {answerTimeRemainingSec}s
           </p>
           <div
-            className="projector-photo-grid projector-photo-grid--vote-fit"
+            className="projector-photo-grid projector-photo-grid--vote-fit projector-photo-grid--square"
             style={{
               "--vote-grid-cols": photoVoteGridCols,
               "--vote-grid-rows": photoVoteGridRows,
             }}
           >
             {photoVotePairings.map((pairing) => (
-              <article key={pairing.number} className="projector-photo-card projector-photo-card--vote-fit">
+              <article
+                key={pairing.number}
+                className="projector-photo-card projector-photo-card--vote-fit projector-photo-card--square"
+              >
                 <p className="projector-photo-number">#{pairing.number}</p>
                 {pairing.photoDataUrl ? (
                   <img src={pairing.photoDataUrl} alt={`Pairing ${pairing.number}`} />

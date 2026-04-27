@@ -11,6 +11,16 @@ import {
 } from "./components/overlays/Overlays.jsx";
 import { ProjectorView as ProjectorViewMod } from "./components/projector/ProjectorView.jsx";
 import { VoteDistribution as VoteDistributionMod } from "./components/vote/VoteDistribution.jsx";
+import {
+  disposeAudioEngine,
+  playBgm,
+  playSfx,
+  preloadBgmTracks,
+  preloadSfxTracks,
+  setMasterEnabled,
+  stopBgm,
+} from "./audio/engine.js";
+import { getBgmTrackForSession } from "./audio/bgmPolicy.js";
 
  
 
@@ -38,6 +48,20 @@ function endgameStandingForPlayer(you, players, scores) {
   const higher = players.filter((p) => Number(scores?.[p.id] ?? 0) > myScore).length;
   return { score: myScore, rank: higher + 1, total: players.length };
 }
+
+const BGM_FADE_MS = 1200;
+const BGM_PRELOAD_TRACKS = [
+  "lobby",
+  "countdown_30_sec",
+  "countdown_60_sec",
+  "countdown_75_sec",
+  "countdown_90_sec",
+  "round_1_voting",
+  "round_2_voting",
+  "round_3_voting",
+  "final_results",
+];
+const SFX_PRELOAD_TRACKS = ["mogged", "pop", "success", "drumroll", "kaching", "glitch", "thud"];
 
 export default function App() {
   const socket = useSocket();
@@ -72,6 +96,15 @@ export default function App() {
   const answeringInitKeyRef = useRef(null);
   const bothFoldShownQueueRef = useRef(null);
   const bothFoldStartTimerRef = useRef(null);
+  const prevLobbyPlayerCountRef = useRef(null);
+  const prevReadyCountByPhaseRef = useRef({
+    answering: null,
+    photo_upload: null,
+    photo_captioning: null,
+  });
+  const firedDrumrollKeyRef = useRef(null);
+  const firedGlitchKeyRef = useRef(null);
+  const prevShowdownVotesCastRef = useRef({ queueKey: null, votesCast: 0 });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -165,6 +198,191 @@ export default function App() {
       }
     };
   }, [socket]);
+
+  useEffect(() => {
+    preloadBgmTracks(BGM_PRELOAD_TRACKS);
+    preloadSfxTracks(SFX_PRELOAD_TRACKS);
+    return () => {
+      disposeAudioEngine();
+    };
+  }, []);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    setMasterEnabled(projectorClient);
+    if (!projectorClient) {
+      stopBgm({ fadeMs: BGM_FADE_MS });
+      return;
+    }
+
+    const track = getBgmTrackForSession(session);
+    if (!track) {
+      stopBgm({ fadeMs: BGM_FADE_MS });
+      return;
+    }
+    playBgm(track, { fadeMs: BGM_FADE_MS, loop: true });
+  }, [
+    session?.role,
+    session?.phase,
+    session?.textRoundNumber,
+    session?.answerTimeLimitSec,
+    session?.showdown?.splashActive,
+  ]);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    if (!projectorClient) {
+      prevLobbyPlayerCountRef.current = null;
+      return;
+    }
+    if (session?.phase !== "lobby") {
+      prevLobbyPlayerCountRef.current = null;
+      return;
+    }
+    const count = Number(session?.players?.length || 0);
+    const prev = prevLobbyPlayerCountRef.current;
+    prevLobbyPlayerCountRef.current = count;
+    if (prev === null || !Number.isFinite(prev) || count <= prev) return;
+    for (let i = 0; i < count - prev; i += 1) {
+      setTimeout(() => playSfx("pop", { volume: 0.95 }), i * 120);
+    }
+  }, [session?.role, session?.phase, session?.players?.length]);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    const phase = session?.phase;
+    if (!projectorClient || !phase) {
+      prevReadyCountByPhaseRef.current = {
+        answering: null,
+        photo_upload: null,
+        photo_captioning: null,
+      };
+      return;
+    }
+
+    if (phase === "answering") {
+      const textRound = Number(session?.textRoundNumber ?? 1);
+      if (textRound === 1 || textRound === 2) {
+        const doneCount = Number(session?.answerProgress?.done?.length || 0);
+        const prevCount = prevReadyCountByPhaseRef.current.answering;
+        prevReadyCountByPhaseRef.current.answering = doneCount;
+        if (prevCount !== null && doneCount > prevCount) {
+          for (let i = 0; i < doneCount - prevCount; i += 1) {
+            setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+          }
+        }
+      } else {
+        prevReadyCountByPhaseRef.current.answering = null;
+      }
+    } else {
+      prevReadyCountByPhaseRef.current.answering = null;
+    }
+
+    if (phase === "photo_upload") {
+      const doneCount = Number(session?.photoRound?.uploadProgress?.done?.length || 0);
+      const prevCount = prevReadyCountByPhaseRef.current.photo_upload;
+      prevReadyCountByPhaseRef.current.photo_upload = doneCount;
+      if (prevCount !== null && doneCount > prevCount) {
+        for (let i = 0; i < doneCount - prevCount; i += 1) {
+          setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+        }
+      }
+    } else {
+      prevReadyCountByPhaseRef.current.photo_upload = null;
+    }
+
+    if (phase === "photo_captioning") {
+      const doneCount = Number(session?.photoRound?.captionProgress?.done?.length || 0);
+      const prevCount = prevReadyCountByPhaseRef.current.photo_captioning;
+      prevReadyCountByPhaseRef.current.photo_captioning = doneCount;
+      if (prevCount !== null && doneCount > prevCount) {
+        for (let i = 0; i < doneCount - prevCount; i += 1) {
+          setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+        }
+      }
+    } else {
+      prevReadyCountByPhaseRef.current.photo_captioning = null;
+    }
+  }, [
+    session?.role,
+    session?.phase,
+    session?.textRoundNumber,
+    session?.answerProgress?.done?.length,
+    session?.photoRound?.uploadProgress?.done?.length,
+    session?.photoRound?.captionProgress?.done?.length,
+  ]);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    if (!projectorClient) {
+      firedDrumrollKeyRef.current = null;
+      return;
+    }
+    const phase = session?.phase;
+    const splashActive = !!session?.showdown?.splashActive;
+    let key = null;
+    if (phase === "showdown" && splashActive) {
+      key = `showdown:${String(session?.showdown?.queueIndex ?? "")}`;
+    } else if (phase === "photo_vote_loading") {
+      key = `photo_vote_loading:${String(session?.code ?? "")}`;
+    }
+    if (!key || firedDrumrollKeyRef.current === key) return;
+    firedDrumrollKeyRef.current = key;
+    playSfx("drumroll", { volume: 0.95 });
+  }, [session?.role, session?.phase, session?.showdown?.splashActive, session?.showdown?.queueIndex, session?.code]);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    if (!projectorClient) {
+      firedGlitchKeyRef.current = null;
+      return;
+    }
+    const phase = session?.phase;
+    if (phase !== "round2_text_splash" && phase !== "photo_round_splash") return;
+    const key = `${phase}:${String(session?.code ?? "")}`;
+    if (firedGlitchKeyRef.current === key) return;
+    firedGlitchKeyRef.current = key;
+    playSfx("glitch", { volume: 0.9 });
+  }, [session?.role, session?.phase, session?.code]);
+
+  useEffect(() => {
+    const projectorClient = session?.role === "projector";
+    const showdown = session?.showdown;
+    if (!projectorClient || session?.phase !== "showdown" || !showdown) {
+      prevShowdownVotesCastRef.current = { queueKey: null, votesCast: 0 };
+      return;
+    }
+
+    const textRound = Number(showdown.textRoundNumber ?? 1);
+    const validRound = textRound === 1 || textRound === 2;
+    const activeVoting = !showdown.splashActive && !showdown.reviewActive;
+    const queueKey = String(showdown.queueIndex ?? "");
+    const votesCast = Math.max(0, Number(showdown.votesCast || 0));
+
+    if (!validRound || !activeVoting || !queueKey) {
+      prevShowdownVotesCastRef.current = { queueKey, votesCast };
+      return;
+    }
+
+    const prev = prevShowdownVotesCastRef.current;
+    const sameQueue = prev.queueKey === queueKey;
+    const delta = sameQueue ? votesCast - prev.votesCast : 0;
+    if (delta > 0) {
+      for (let i = 0; i < delta; i += 1) {
+        setTimeout(() => playSfx("pop", { volume: 0.95 }), i * 90);
+      }
+    }
+
+    prevShowdownVotesCastRef.current = { queueKey, votesCast };
+  }, [
+    session?.role,
+    session?.phase,
+    session?.showdown?.queueIndex,
+    session?.showdown?.votesCast,
+    session?.showdown?.splashActive,
+    session?.showdown?.reviewActive,
+    session?.showdown?.textRoundNumber,
+  ]);
 
   useEffect(() => {
     if (session?.phase !== "answering") setReportBadPromptKey(null);
@@ -408,8 +626,11 @@ export default function App() {
 
   const vote = useCallback(
     (choice) => {
+      setError("");
       socket.emit("vote", { choice }, (res) => {
-        if (!res?.ok) setError(res?.error || "Vote failed.");
+        if (!res?.ok) {
+          setError(res?.error || "Vote failed.");
+        }
       });
     },
     [socket]
@@ -910,6 +1131,11 @@ export default function App() {
           showVoteDistribution={showVoteDistribution}
           answerTimeRemainingSec={answerTimeRemainingSec}
           answerTimeLimitSec={answerTimeLimitSec}
+          onCarouselPairingIndexChange={(idx) => {
+            if (session?.role !== "projector") return;
+            if (!Number.isFinite(Number(idx))) return;
+            playSfx("thud", { volume: 0.9 });
+          }}
         />
       )}
 
@@ -1543,7 +1769,7 @@ export default function App() {
                 : session.showdown.foldedAuthorIds?.length === 1
                 ? "One author didn't have enough aura. No voting."
                 : session.showdown.myVote
-                ? `You voted ${session.showdown.myVote}.`
+                ? `You've submitted your vote.`
                 : "You wrote one of these answers — sit tight."}
             </p>
           )}
