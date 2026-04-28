@@ -916,10 +916,13 @@ function advanceShowdown(sess) {
 
   const io = globalThis.__io;
   if (mogPayload && io) {
-    if (loserSocketId) {
-      io.to(sess.code).except(loserSocketId).emit("unanimous_victory", mogPayload);
-    } else {
-      io.to(sess.code).emit("unanimous_victory", mogPayload);
+    const winnerSocketId =
+      sess.players.find((p) => p.id === mogPayload.winningAuthorId)?.socketId ?? null;
+    if (winnerSocketId) {
+      io.to(winnerSocketId).emit("unanimous_victory", mogPayload);
+    }
+    for (const pr of sess.projectors || []) {
+      io.to(pr.socketId).emit("unanimous_victory", mogPayload);
     }
   }
 
