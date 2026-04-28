@@ -144,6 +144,10 @@ export default function App() {
       }
       setSession(s);
       latestSessionRef.current = s;
+      if (s?.role !== "projector" && s?.code && s?.you) {
+        const self = (s.players || []).find((p) => p.id === s.you);
+        if (self?.name) setName((prev) => prev || self.name);
+      }
       setError("");
     }
     function onMog(p) {
@@ -517,6 +521,7 @@ export default function App() {
       (res) => {
         if (!res?.ok) {
           setError(res?.error || "Could not join.");
+          return;
         }
       }
     );

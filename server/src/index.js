@@ -40,6 +40,7 @@ import {
   PLAYER_ICON_KEYS,
   PORT,
   RATE_LIMITS,
+  RECONNECT_GRACE_MS,
   ROUND1_FORFEIT_WIN_POINTS,
   ROUND1_LEADERBOARD_MS,
   ROUND1_MOG_BONUS_POINTS,
@@ -108,6 +109,20 @@ function findSessionByCode(code) {
   return sessions.get(String(code).toUpperCase()) ?? null;
 }
 
+function clearPlayerReconnectGrace(player) {
+  if (!player) return;
+  if (player._disconnectGraceTimer) {
+    clearTimeout(player._disconnectGraceTimer);
+    player._disconnectGraceTimer = null;
+  }
+  player.disconnectedAt = null;
+  player.reconnectDeadlineAt = null;
+}
+
+function clearSessionReconnectGrace(sess) {
+  for (const p of sess.players || []) clearPlayerReconnectGrace(p);
+}
+
 function broadcastSession(sess) {
   const io = globalThis.__io;
   if (!io) return;
@@ -119,6 +134,7 @@ function broadcastSession(sess) {
     }
   }
   for (const p of sess.players) {
+    if (!p.socketId) continue;
     io.to(p.socketId).emit("session_state", sessionSnapshot(sess, p.id));
   }
 }
@@ -1034,11 +1050,42 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Session not found." });
         return;
       }
+      const rawPlayerName = clampStringInput(payload.name, { maxLen: 24 }) || "";
+      const normalizedPlayerName = rawPlayerName.toLowerCase();
       if (sess.phase !== "lobby") {
-        if (typeof cb === "function") cb({ ok: false, error: "Game already started." });
+        if (!rawPlayerName) {
+          if (typeof cb === "function") {
+            cb({ ok: false, error: "Enter your original display name to rejoin." });
+          }
+          return;
+        }
+        const reconnectingPlayer =
+          sess.players.find(
+            (p) => !p.socketId && String(p.name || "").toLowerCase() === normalizedPlayerName
+          ) || null;
+        if (!reconnectingPlayer) {
+          const alreadyConnected = sess.players.some(
+            (p) => p.socketId && String(p.name || "").toLowerCase() === normalizedPlayerName
+          );
+          if (typeof cb === "function") {
+            cb({ ok: false, error: alreadyConnected ? "Player is already connected." : "Game already started." });
+          }
+          return;
+        }
+        const deadline = Number(reconnectingPlayer.reconnectDeadlineAt || 0);
+        if (!deadline || deadline <= Date.now()) {
+          clearPlayerReconnectGrace(reconnectingPlayer);
+          if (typeof cb === "function") cb({ ok: false, error: "Reconnect window expired." });
+          return;
+        }
+        reconnectingPlayer.socketId = socket.id;
+        clearPlayerReconnectGrace(reconnectingPlayer);
+        socket.join(sess.code);
+        if (typeof cb === "function") cb({ ok: true, code: sess.code, playerId: reconnectingPlayer.id });
+        broadcastSession(sess);
         return;
       }
-      const playerName = clampStringInput(payload.name, { maxLen: 24 }) || "Player";
+      const playerName = rawPlayerName || "Player";
       if (sess.players.some((p) => p.name.toLowerCase() === playerName.toLowerCase())) {
         if (typeof cb === "function") cb({ ok: false, error: "Name already taken." });
         return;
@@ -1820,8 +1867,10 @@ function startServer() {
       if (!found) return;
       const { sess, player } = found;
       if (sess.phase === "lobby") {
+        clearPlayerReconnectGrace(player);
         sess.players = sess.players.filter((p) => p.id !== player.id);
         if (sess.players.length === 0) {
+          clearSessionReconnectGrace(sess);
           sessions.delete(sess.code);
         } else {
           if (sess.hostPlayerId === player.id) {
@@ -1832,8 +1881,10 @@ function startServer() {
         }
       } else if (sess.phase === "play_again_transition") {
         clearPlayAgainTimer(sess);
+        clearPlayerReconnectGrace(player);
         sess.players = sess.players.filter((p) => p.id !== player.id);
         if (sess.players.length === 0) {
+          clearSessionReconnectGrace(sess);
           sessions.delete(sess.code);
           return;
         }
@@ -1844,13 +1895,28 @@ function startServer() {
         sess.phase = "ended";
         broadcastSession(sess);
       } else {
-        clearAllGameTimers(sess);
+        clearPlayerReconnectGrace(player);
+        player.socketId = null;
+        player.disconnectedAt = Date.now();
+        player.reconnectDeadlineAt = player.disconnectedAt + RECONNECT_GRACE_MS;
+        const disconnectedPlayerId = player.id;
         const goneCode = sess.code;
-        sessions.delete(sess.code);
-        io.to(goneCode).emit("session_state", {
-          phase: "gone",
-          message: "A player left — session ended.",
-        });
+        player._disconnectGraceTimer = setTimeout(() => {
+          const s = sessions.get(goneCode);
+          if (!s) return;
+          const p = s.players.find((x) => x.id === disconnectedPlayerId);
+          if (!p || p.socketId) return;
+          const deadline = Number(p.reconnectDeadlineAt || 0);
+          if (!deadline || Date.now() < deadline) return;
+          clearSessionReconnectGrace(s);
+          clearAllGameTimers(s);
+          sessions.delete(goneCode);
+          io.to(goneCode).emit("session_state", {
+            phase: "gone",
+            message: "A player left and did not reconnect — session ended.",
+          });
+        }, RECONNECT_GRACE_MS);
+        broadcastSession(sess);
       }
     });
   });
