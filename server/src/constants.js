@@ -6,6 +6,7 @@ export const SHOWDOWN_PASSES = 1;
 export const ANSWER_TIME_OPTIONS_SEC = [60, 75, 90];
 export const DEFAULT_ANSWER_TIME_SEC = 75;
 export const ANSWER_TIMEUP_SUBMIT_GRACE_MS = 1200;
+export const RECONNECT_GRACE_MS = 60_000;
 
 /** Time vote distribution stays on screen before advancing (after mog/chud when applicable). */
 export const VOTE_DISTRIBUTION_REVIEW_MS = 7500;

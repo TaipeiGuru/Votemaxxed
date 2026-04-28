@@ -50,6 +50,7 @@ function endgameStandingForPlayer(you, players, scores) {
 }
 
 const BGM_FADE_MS = 1200;
+const RECONNECT_STORAGE_KEY = "votemaxxed.reconnectIdentity.v1";
 const BGM_PRELOAD_TRACKS = [
   "lobby",
   "countdown_30_sec",
@@ -62,6 +63,38 @@ const BGM_PRELOAD_TRACKS = [
   "final_results",
 ];
 const SFX_PRELOAD_TRACKS = ["mogged", "pop", "success", "drumroll", "kaching", "glitch", "thud"];
+
+function readReconnectIdentity() {
+  try {
+    const raw = window.localStorage.getItem(RECONNECT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const code = typeof parsed.code === "string" ? parsed.code.trim().toUpperCase() : "";
+    const playerId = typeof parsed.playerId === "string" ? parsed.playerId.trim() : "";
+    const playerName = typeof parsed.playerName === "string" ? parsed.playerName : "Player";
+    if (code.length !== 6 || !playerId) return null;
+    return { code, playerId, playerName };
+  } catch {
+    return null;
+  }
+}
+
+function writeReconnectIdentity(identity) {
+  try {
+    window.localStorage.setItem(RECONNECT_STORAGE_KEY, JSON.stringify(identity));
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.).
+  }
+}
+
+function clearReconnectIdentity() {
+  try {
+    window.localStorage.removeItem(RECONNECT_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 export default function App() {
   const socket = useSocket();
@@ -105,6 +138,7 @@ export default function App() {
   const firedDrumrollKeyRef = useRef(null);
   const firedGlitchKeyRef = useRef(null);
   const prevShowdownVotesCastRef = useRef({ queueKey: null, votesCast: 0 });
+  const autoResumeAttemptedRef = useRef(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -137,6 +171,7 @@ export default function App() {
   useEffect(() => {
     function onState(s) {
       if (s.phase === "gone") {
+        clearReconnectIdentity();
         setSession(null);
         latestSessionRef.current = null;
         setError(s.message || "Session ended.");
@@ -144,6 +179,15 @@ export default function App() {
       }
       setSession(s);
       latestSessionRef.current = s;
+      if (s?.role !== "projector" && s?.code && s?.you) {
+        const self = (s.players || []).find((p) => p.id === s.you);
+        if (self?.name) setName((prev) => prev || self.name);
+        writeReconnectIdentity({
+          code: s.code,
+          playerId: s.you,
+          playerName: self?.name || "Player",
+        });
+      }
       setError("");
     }
     function onMog(p) {
@@ -198,6 +242,32 @@ export default function App() {
       }
     };
   }, [socket]);
+
+  useEffect(() => {
+    if (session) return undefined;
+    const tryAutoResume = () => {
+      if (autoResumeAttemptedRef.current) return;
+      const saved = readReconnectIdentity();
+      if (!saved) return;
+      autoResumeAttemptedRef.current = true;
+      setCodeInput(saved.code);
+      if (saved.playerName) setName((prev) => prev || saved.playerName);
+      socket.emit(
+        "join_session",
+        { code: saved.code, name: saved.playerName || "Player", playerId: saved.playerId },
+        (res) => {
+          if (res?.ok) return;
+          clearReconnectIdentity();
+          autoResumeAttemptedRef.current = false;
+        }
+      );
+    };
+    socket.on("connect", tryAutoResume);
+    if (socket.connected) tryAutoResume();
+    return () => {
+      socket.off("connect", tryAutoResume);
+    };
+  }, [socket, session]);
 
   useEffect(() => {
     preloadBgmTracks(BGM_PRELOAD_TRACKS);
@@ -506,6 +576,11 @@ export default function App() {
         setError(res?.error || "Could not create session.");
         return;
       }
+      writeReconnectIdentity({
+        code: res.code,
+        playerId: res.playerId,
+        playerName: name || "Host",
+      });
     });
   }, [socket, name]);
 
@@ -517,7 +592,13 @@ export default function App() {
       (res) => {
         if (!res?.ok) {
           setError(res?.error || "Could not join.");
+          return;
         }
+        writeReconnectIdentity({
+          code: (res.code || codeInput || "").trim().toUpperCase(),
+          playerId: res.playerId,
+          playerName: name || "Player",
+        });
       }
     );
   }, [socket, codeInput, name]);
@@ -526,6 +607,7 @@ export default function App() {
     setError("");
     socket.emit("join_projector", { code: codeInput.trim() }, (res) => {
       if (!res?.ok) setError(res?.error || "Could not open projector mode.");
+      if (res?.ok) clearReconnectIdentity();
     });
   }, [socket, codeInput]);
 
