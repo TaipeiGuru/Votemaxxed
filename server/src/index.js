@@ -1050,21 +1050,26 @@ function startServer() {
         if (typeof cb === "function") cb({ ok: false, error: "Session not found." });
         return;
       }
-      const reconnectPlayerId =
-        clampStringInput(payload.playerId, {
-          minLen: 1,
-          maxLen: 64,
-          trim: true,
-          pattern: /^[a-zA-Z0-9_-]+$/,
-        }) || "";
-      if (reconnectPlayerId) {
-        const reconnectingPlayer = sess.players.find((p) => p.id === reconnectPlayerId) || null;
-        if (!reconnectingPlayer) {
-          if (typeof cb === "function") cb({ ok: false, error: "Reconnect identity not found." });
+      const rawPlayerName = clampStringInput(payload.name, { maxLen: 24 }) || "";
+      const normalizedPlayerName = rawPlayerName.toLowerCase();
+      if (sess.phase !== "lobby") {
+        if (!rawPlayerName) {
+          if (typeof cb === "function") {
+            cb({ ok: false, error: "Enter your original display name to rejoin." });
+          }
           return;
         }
-        if (reconnectingPlayer.socketId) {
-          if (typeof cb === "function") cb({ ok: false, error: "Player is already connected." });
+        const reconnectingPlayer =
+          sess.players.find(
+            (p) => !p.socketId && String(p.name || "").toLowerCase() === normalizedPlayerName
+          ) || null;
+        if (!reconnectingPlayer) {
+          const alreadyConnected = sess.players.some(
+            (p) => p.socketId && String(p.name || "").toLowerCase() === normalizedPlayerName
+          );
+          if (typeof cb === "function") {
+            cb({ ok: false, error: alreadyConnected ? "Player is already connected." : "Game already started." });
+          }
           return;
         }
         const deadline = Number(reconnectingPlayer.reconnectDeadlineAt || 0);
@@ -1080,11 +1085,7 @@ function startServer() {
         broadcastSession(sess);
         return;
       }
-      if (sess.phase !== "lobby") {
-        if (typeof cb === "function") cb({ ok: false, error: "Game already started." });
-        return;
-      }
-      const playerName = clampStringInput(payload.name, { maxLen: 24 }) || "Player";
+      const playerName = rawPlayerName || "Player";
       if (sess.players.some((p) => p.name.toLowerCase() === playerName.toLowerCase())) {
         if (typeof cb === "function") cb({ ok: false, error: "Name already taken." });
         return;
