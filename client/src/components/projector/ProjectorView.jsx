@@ -205,6 +205,17 @@ export function ProjectorView({
 
       {showdown && sd && !sd.splashActive && !(sd.foldedAuthorIds?.length > 0) && !sd.bothFolded && (
         <div className="projector-card projector-showdown">
+          {(sd.textRoundNumber === 1 || sd.textRoundNumber === 2) && (
+            <p
+              style={{
+                margin: "0 0 0.6rem",
+                fontWeight: 700,
+                color: answerTimeRemainingSec <= 3 ? "var(--danger)" : "var(--accent)",
+              }}
+            >
+              Time left: {answerTimeRemainingSec}s
+            </p>
+          )}
           <h2 className="projector-prompt">{sd.promptText}</h2>
           {breakdownVisible && session.lastResult?.mog ? (
             <p

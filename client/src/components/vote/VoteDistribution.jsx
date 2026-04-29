@@ -32,7 +32,7 @@ function ProjectorColumnPointReveal({ base, mogBonus, alignEnd, animKey }) {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      playSfx("kaching", { volume: 0.95 });
+      playSfx("kaching", { volume: 0.45 });
     }, 1000);
     return () => clearTimeout(timer);
   }, [animKey]);

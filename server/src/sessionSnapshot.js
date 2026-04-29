@@ -372,6 +372,7 @@ export function sessionSnapshot(sess, forPlayerId) {
           Object.keys(sess.showdownVotes[queueIndex] || {}).length === eligibleVoters.length,
         textRoundNumber: tr,
         showdownPointMultiplier: showdownPointMultiplier(sess),
+        voteEndsAt: sess.showdownVoteEndsAt ?? null,
       },
       scores: { ...sess.scores },
       lastResult,

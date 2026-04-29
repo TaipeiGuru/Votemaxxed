@@ -15,6 +15,7 @@ export const OVERLAY_BEFORE_REVIEW_MS = 3600;
 export const NEXT_VOTE_SPLASH_MS = 3000;
 export const BOTH_FOLD_OVERLAY_DELAY_MS = 1500;
 export const BOTH_FOLD_OVERLAY_DURATION_MS = 9000;
+export const SHOWDOWN_VOTING_DURATION_MS = 8000;
 export const PHOTO_UPLOAD_TO_CAPTION_TRANSITION_MS = 2500;
 export const PHOTO_CAPTION_TO_VOTE_LOADING_MS = 2500;
 /** Max time photo-round rank voting stays open; early finish when all ballots are complete. */

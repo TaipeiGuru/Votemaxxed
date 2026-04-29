@@ -25,7 +25,7 @@ async function main() {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(__dirname, "../..");
   const envPath = path.join(repoRoot, "server", ".env");
-  const promptsPath = path.join(repoRoot, "client", "450_prompts.txt");
+  const promptsPath = path.join(repoRoot, "client", "prompts.txt");
 
   const envRaw = await fs.readFile(envPath, "utf8");
   const env = parseDotEnv(envRaw);

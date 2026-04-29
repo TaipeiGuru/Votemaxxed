@@ -268,7 +268,7 @@ export default function App() {
         prevReadyCountByPhaseRef.current.answering = doneCount;
         if (prevCount !== null && doneCount > prevCount) {
           for (let i = 0; i < doneCount - prevCount; i += 1) {
-            setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+            setTimeout(() => playSfx("success", { volume: 0.4 }), i * 90);
           }
         }
       } else {
@@ -284,7 +284,7 @@ export default function App() {
       prevReadyCountByPhaseRef.current.photo_upload = doneCount;
       if (prevCount !== null && doneCount > prevCount) {
         for (let i = 0; i < doneCount - prevCount; i += 1) {
-          setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+          setTimeout(() => playSfx("success", { volume: 0.4 }), i * 90);
         }
       }
     } else {
@@ -297,7 +297,7 @@ export default function App() {
       prevReadyCountByPhaseRef.current.photo_captioning = doneCount;
       if (prevCount !== null && doneCount > prevCount) {
         for (let i = 0; i < doneCount - prevCount; i += 1) {
-          setTimeout(() => playSfx("success", { volume: 0.9 }), i * 90);
+          setTimeout(() => playSfx("success", { volume: 0.4 }), i * 90);
         }
       }
     } else {
@@ -684,6 +684,11 @@ export default function App() {
     const timedPhaseEndsAt =
       session?.phase === "answering"
         ? session?.answeringEndsAt
+        : session?.phase === "showdown" &&
+          !session?.showdown?.splashActive &&
+          !session?.showdown?.reviewActive &&
+          (session?.showdown?.textRoundNumber === 1 || session?.showdown?.textRoundNumber === 2)
+        ? session?.showdown?.voteEndsAt
         : session?.phase === "photo_upload"
         ? session?.photoRound?.uploadEndsAt
         : session?.phase === "photo_captioning"
@@ -706,6 +711,10 @@ export default function App() {
   }, [
     session?.phase,
     session?.answeringEndsAt,
+    session?.showdown?.voteEndsAt,
+    session?.showdown?.splashActive,
+    session?.showdown?.reviewActive,
+    session?.showdown?.textRoundNumber,
     session?.photoRound?.uploadEndsAt,
     session?.photoRound?.captionEndsAt,
     session?.photoRound?.voteEndsAt,
@@ -1714,6 +1723,17 @@ export default function App() {
         !(session.showdown.foldedAuthorIds?.length > 0) &&
         !session.showdown.bothFolded && (
         <div className="card">
+          {(session.showdown.textRoundNumber === 1 || session.showdown.textRoundNumber === 2) && (
+            <p
+              style={{
+                margin: "0 0 0.5rem",
+                fontWeight: 700,
+                color: answerTimeRemainingSec <= 3 ? "var(--danger)" : "var(--accent)",
+              }}
+            >
+              Time left: {answerTimeRemainingSec}s
+            </p>
+          )}
           <h2 style={{ marginBottom: "0.75rem" }}>
             {session.showdown.promptText}
           </h2>
