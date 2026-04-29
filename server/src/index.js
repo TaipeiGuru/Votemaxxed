@@ -45,6 +45,7 @@ import {
   ROUND1_LEADERBOARD_MS,
   ROUND1_MOG_BONUS_POINTS,
   ROUND2_TEXT_SPLASH_MS,
+  SHOWDOWN_VOTING_DURATION_MS,
   SHOWDOWN_PASSES,
   SOCKET_EVENT_PAYLOAD_LIMITS,
   VOTE_DISTRIBUTION_REVIEW_MS,
@@ -152,6 +153,11 @@ function clearShowdownTimers(sess) {
     clearTimeout(sess._nextVoteSplashTimer);
     sess._nextVoteSplashTimer = null;
   }
+  if (sess._showdownVoteTimer) {
+    clearTimeout(sess._showdownVoteTimer);
+    sess._showdownVoteTimer = null;
+  }
+  sess.showdownVoteEndsAt = null;
 }
 
 function clearAnsweringTimer(sess) {
@@ -337,6 +343,7 @@ async function setupTextRoundAnswering(sess, opts) {
   sess.winner = null;
   sess.showdownReviewActive = false;
   sess.showdownSplashActive = false;
+  sess.showdownVoteEndsAt = null;
   clearShowdownTimers(sess);
   clearRound1LeaderboardTimer(sess);
   clearRound2TextSplashTimer(sess);
@@ -665,6 +672,7 @@ function beginShowdownFromAnswering(sess) {
   sess.currentQueueIndex = 0;
   sess.showdownVotes = {};
   sess.answeringEndsAt = null;
+  sess.showdownVoteEndsAt = null;
   skipShowdownsWithNoVoters(sess);
   if (sess.phase !== "showdown") return;
   const initialQueueIndex = sess.currentQueueIndex;
@@ -679,9 +687,57 @@ function beginShowdownFromAnswering(sess) {
     }
     s.showdownSplashActive = false;
     if (!maybeStartBothFoldAutoAdvance(s)) {
+      scheduleShowdownVoteTimeout(s);
       broadcastSession(s);
     }
   }, NEXT_VOTE_SPLASH_MS);
+}
+
+function scheduleShowdownVoteTimeout(sess) {
+  if (
+    sess.phase !== "showdown" ||
+    sess.showdownReviewActive ||
+    sess.showdownSplashActive ||
+    sess.currentQueueIndex >= sess.showdownQueue.length
+  ) {
+    return;
+  }
+  if (sess._showdownVoteTimer) {
+    clearTimeout(sess._showdownVoteTimer);
+    sess._showdownVoteTimer = null;
+  }
+  const sd = getCurrentShowdown(sess);
+  if (getFoldedAuthorIds(sess, sd).length > 0) {
+    sess.showdownVoteEndsAt = null;
+    return;
+  }
+  const eligible = sess.players.map((p) => p.id).filter((id) => !sd.authorIds.includes(id));
+  if (eligible.length === 0) {
+    sess.showdownVoteEndsAt = null;
+    return;
+  }
+  const queueIndex = sess.currentQueueIndex;
+  const code = sess.code;
+  sess.showdownVoteEndsAt = Date.now() + SHOWDOWN_VOTING_DURATION_MS;
+  sess._showdownVoteTimer = setTimeout(() => {
+    const s = sessions.get(code);
+    if (!s) return;
+    s._showdownVoteTimer = null;
+    if (
+      s.phase !== "showdown" ||
+      s.showdownReviewActive ||
+      s.showdownSplashActive ||
+      s.currentQueueIndex !== queueIndex
+    ) {
+      return;
+    }
+    s.showdownVoteEndsAt = null;
+    advanceShowdown(s);
+    skipShowdownsWithNoVoters(s);
+    if (!maybeStartBothFoldAutoAdvance(s)) {
+      broadcastSession(s);
+    }
+  }, SHOWDOWN_VOTING_DURATION_MS);
 }
 
 function bumpShowdownQueueAndMaybeEnd(sess) {
@@ -756,6 +812,7 @@ function maybeStartBothFoldAutoAdvance(sess) {
       skipShowdownsWithNoVoters(s2);
       clearLastShowdownResultIfStillVoting(s2);
       if (!maybeStartBothFoldAutoAdvance(s2)) {
+        scheduleShowdownVoteTimeout(s2);
         broadcastSession(s2);
       }
     }, NEXT_VOTE_SPLASH_MS);
@@ -799,6 +856,7 @@ function scheduleShowdownQueueAdvance(sess, overlayPause) {
       skipShowdownsWithNoVoters(s2);
       clearLastShowdownResultIfStillVoting(s2);
       if (!maybeStartBothFoldAutoAdvance(s2)) {
+        scheduleShowdownVoteTimeout(s2);
         broadcastSession(s2);
       }
     }, NEXT_VOTE_SPLASH_MS);
@@ -817,6 +875,11 @@ function skipShowdownsWithNoVoters(sess) {
 }
 
 function advanceShowdown(sess) {
+  if (sess._showdownVoteTimer) {
+    clearTimeout(sess._showdownVoteTimer);
+    sess._showdownVoteTimer = null;
+  }
+  sess.showdownVoteEndsAt = null;
   const sd = getCurrentShowdown(sess);
   const votes = sess.showdownVotes[sess.currentQueueIndex] || {};
   const authors = sd.authorIds;
@@ -836,10 +899,12 @@ function advanceShowdown(sess) {
     basePoints[pid] = Number(basePoints[pid] || 0) * mult;
   }
   const points = { ...basePoints };
-  const uni = isUnanimous(votesForA, votesForB);
+  const votesCast = Object.keys(votes).filter((pid) => eligible.includes(pid)).length;
+  const allEligibleVoted = eligible.length > 0 && votesCast === eligible.length;
+  const uni = allEligibleVoted ? isUnanimous(votesForA, votesForB) : null;
   const mogBonusAmount =
-    uni && eligible.length > 0 ? ROUND1_MOG_BONUS_POINTS * mult : 0;
-  if (uni && eligible.length > 0) {
+    uni ? ROUND1_MOG_BONUS_POINTS * mult : 0;
+  if (uni) {
     const winningAuthor = uni.winner === "A" ? authors[0] : authors[1];
     points[winningAuthor] = Number(points[winningAuthor] || 0) + mogBonusAmount;
   }
@@ -866,7 +931,7 @@ function advanceShowdown(sess) {
   const authorBName = sess.players.find((p) => p.id === authors[1])?.name ?? "?";
 
   let mogPayload = null;
-  if (uni && eligible.length > 0) {
+  if (uni) {
     const winningSide = uni.winner;
     const winningAuthor = winningSide === "A" ? authors[0] : authors[1];
     const winningAnswer = winningSide === "A" ? answerAText : answerBText;
@@ -907,12 +972,12 @@ function advanceShowdown(sess) {
       sideA: {
         base: basePoints[authors[0]] ?? 0,
         mogBonus:
-          uni && eligible.length > 0 && uni.winner === "A" ? mogBonusAmount : 0,
+          uni && uni.winner === "A" ? mogBonusAmount : 0,
       },
       sideB: {
         base: basePoints[authors[1]] ?? 0,
         mogBonus:
-          uni && eligible.length > 0 && uni.winner === "B" ? mogBonusAmount : 0,
+          uni && uni.winner === "B" ? mogBonusAmount : 0,
       },
     },
     mog: mogPayload,
@@ -1831,6 +1896,10 @@ function startServer() {
       const authors = sd.authorIds;
       if (authors.includes(player.id)) {
         if (typeof cb === "function") cb({ ok: false, error: "Authors cannot vote." });
+        return;
+      }
+      if (Number(sess.showdownVoteEndsAt || 0) > 0 && Date.now() > Number(sess.showdownVoteEndsAt)) {
+        if (typeof cb === "function") cb({ ok: false, error: "Voting window has closed." });
         return;
       }
       const c = payload.choice === "B" ? "B" : "A";
